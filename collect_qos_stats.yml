@@ -1,0 +1,146 @@
+---
+- name: Collect Huawei Switch QoS Queue Dropped Statistics
+  hosts: all
+  gather_facts: no
+  vars:
+    output_dir: "./qos_reports"
+    historical_data_file: "./historical_data.json"
+    csv_output_file: "qos_dropped_stats_{{ ansible_date_time.iso8601_basic }}.csv"
+    
+  tasks:
+    - name: Create output directory
+      ansible.builtin.file:
+        path: "{{ output_dir }}"
+        state: directory
+        mode: '0755'
+      delegate_to: localhost
+      run_once: yes
+    
+    - name: Load historical data if exists
+      ansible.builtin.set_fact:
+        historical_data: "{{ lookup('file', historical_data_file) | from_json | default({}) }}"
+      delegate_to: localhost
+      ignore_errors: yes
+      run_once: yes
+    
+    - name: Get all interfaces (adjust based on your switch)
+      ansible.netcommon.cli_command:
+        command: "display interface brief | include 100GE"
+      register: interfaces_output
+      when: "'100GE' in interfaces_to_monitor"
+    
+    - name: Parse 100GE interfaces
+      ansible.builtin.set_fact:
+        interface_list: "{{ interfaces_output.stdout_lines | select('match', '100GE') | map('regex_search', '100GE\\S+') | map('first') | list }}"
+      when: interfaces_output is defined
+    
+    - name: Set default interface list if not auto-detected
+      ansible.builtin.set_fact:
+        interface_list: "{{ interfaces_to_monitor.split(',') }}"
+      when: interface_list is not defined or interface_list | length == 0
+    
+    - name: Debug interface list
+      debug:
+        var: interface_list
+    
+    - name: Initialize current data dictionary
+      ansible.builtin.set_fact:
+        current_data: {}
+    
+    - name: Collect QoS statistics for each interface
+      ansible.netcommon.cli_command:
+        command: "display qos queue statistics interface {{ interface }}"
+      register: qos_output
+      loop: "{{ interface_list }}"
+      loop_control:
+        loop_var: interface
+      ignore_errors: yes
+    
+    - name: Process QoS output and extract dropped values
+      ansible.builtin.set_fact:
+        interface_data: "{{ interface_data | default({}) | combine({ interface_item: queue_data }) }}"
+      loop: "{{ qos_output.results }}"
+      loop_control:
+        loop_var: result
+        index_var: idx
+      vars:
+        interface_item: "{{ interface_list[idx] }}"
+        queue_data: "{{ dict(queue_list) }}"
+        queue_list: |
+          {%- set lines = result.stdout_lines -%}
+          {%- set queues = [] -%}
+          {%- for i in range(0, 16, 2) -%}
+            {%- if i < lines|length -%}
+              {%- set queue_num = (i/2)|int -%}
+              {%- set queue_line = lines[i:i+2] -%}
+              {%- if queue_line|length >= 2 -%}
+                {%- set parts = queue_line[1].split() -%}
+                {%- if parts|length >= 7 -%}
+                  {%- set dropped_packets = parts[6]|int -%}
+                  {%- do queues.append((queue_num|string, dropped_packets)) -%}
+                {%- endif -%}
+              {%- endif -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ queues }}
+    
+    - name: Calculate dropped-add values
+      ansible.builtin.set_fact:
+        final_data: []
+      delegate_to: localhost
+      run_once: yes
+    
+    - name: Process data for CSV
+      ansible.builtin.set_fact:
+        final_data: "{{ final_data + [csv_row] }}"
+      delegate_to: localhost
+      loop: "{{ interface_list }}"
+      loop_control:
+        loop_var: interface
+      vars:
+        csv_row: |
+          {%- set host_key = inventory_hostname ~ '_' ~ interface -%}
+          {%- set current_dropped = interface_data[interface] | default({}) -%}
+          {%- set historical_dropped = historical_data[host_key] | default({}) -%}
+          {%- for queue in range(0, 8) -%}
+            {%- set queue_str = queue|string -%}
+            {%- set current_val = current_dropped[queue_str] | default(0) -%}
+            {%- set historical_val = historical_dropped[queue_str] | default(0) -%}
+            {%- set dropped_add = current_val - historical_val -%}
+            {%- if dropped_add < 0 %}{% set dropped_add = 0 %}{% endif -%}
+            "{{ inventory_hostname }}","{{ interface }}","queue {{ queue }}","{{ current_val }}","{{ dropped_add }}","{{ ansible_date_time.iso8601 }}"
+          {%- endfor -%}
+    
+    - name: Create CSV header
+      ansible.builtin.copy:
+        content: '"Host","Interface","Queue","Dropped","Dropped-Add","Timestamp"\n'
+        dest: "{{ output_dir }}/{{ csv_output_file }}"
+        mode: '0644'
+      delegate_to: localhost
+      run_once: yes
+    
+    - name: Append data to CSV
+      ansible.builtin.lineinfile:
+        path: "{{ output_dir }}/{{ csv_output_file }}"
+        line: "{{ item }}"
+      delegate_to: localhost
+      loop: "{{ final_data | flatten }}"
+    
+    - name: Update historical data for next run
+      ansible.builtin.set_fact:
+        updated_historical: "{{ historical_data | default({}) }}"
+      delegate_to: localhost
+      run_once: yes
+    
+    - name: Save current data to historical file
+      ansible.builtin.template:
+        src: "historical_data.j2"
+        dest: "{{ historical_data_file }}"
+      delegate_to: localhost
+      run_once: yes
+    
+    - name: Display summary
+      debug:
+        msg: "QoS statistics collected and saved to {{ output_dir }}/{{ csv_output_file }}"
+      delegate_to: localhost
+      run_once: yes
