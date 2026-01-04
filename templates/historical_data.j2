@@ -1,0 +1,12 @@
+{
+{% for host in ansible_play_hosts_all %}
+{% for interface in hostvars[host].interface_list %}
+  "{{ hostvars[host].inventory_hostname }}_{{ interface }}": {
+  {% for queue, value in hostvars[host].interface_data[interface] | dictsort %}
+    "{{ queue }}": {{ value }}{% if not loop.last %},{% endif %}
+  {% endfor %}
+  }{% if not loop.last %},{% endif %}
+{% endfor %}
+{% if not loop.last %},{% endif %}
+{% endfor %}
+}
