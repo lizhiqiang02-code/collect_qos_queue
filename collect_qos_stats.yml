@@ -6,6 +6,7 @@
     output_dir: "./qos_reports"
     historical_data_file: "./historical_data.json"
     csv_output_file: "qos_dropped_stats_{{ ansible_date_time.iso8601_basic }}.csv"
+    interfaces_to_monitor: []
     
   tasks:
     - name: Create output directory
