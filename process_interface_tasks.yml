@@ -13,8 +13,14 @@
 
 - name: Append CSV rows to file
   ansible.builtin.lineinfile:
-    path: "{{ output_dir }}/{{ inventory_hostname }}_qos_{{ file_date.stdout }}.csv"
-    line: '"{{ inventory_hostname }}","{{ interface }}","queue_{{ item }}","0","{{ [0 - historical_data.get(inventory_hostname ~ \"_\" ~ interface, {}).get(\"queue_\" ~ item, 0) | default(0), 0] | max }}","{{ lookup(\"pipe\", \"date -Iseconds\") }}"'
+    path: "{{ output_dir }}/{{ inventory_hostname }}_qos_{{ current_date_value }}.csv"
+    line: '{{ csv_line }}'
     create: no
   delegate_to: localhost
   loop: "{{ range(0, 8) | list }}"
+  vars:
+    csv_line: '"{{ inventory_hostname }}","{{ interface }}","queue_{{ item }}","0","{{ dropped_add }}","{{ timestamp_now }}"'
+    host_key: "{{ inventory_hostname }}_{{ interface }}"
+    hist_val: "{{ historical_data.get(host_key, {}).get('queue_' ~ item, 0) | default(0) }}"
+    dropped_add: "{{ [0 - hist_val | int, 0] | max }}"
+    timestamp_now: "{{ lookup('pipe', 'date -Iseconds') }}"
