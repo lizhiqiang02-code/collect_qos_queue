@@ -18,8 +18,10 @@
         {%- set current_val = 0 -%}
         {%- set hist_val = hist_interface_data.get(queue_key, 0) -%}
         {%- set dropped_add = current_val - hist_val -%}
-        {%- if dropped_add < 0 %}{% set dropped_add = 0 %}{% endif -%}
-        {%- do rows.append('"%s","%s","%s","%s","%s","%s"'|format(
+        {%- if dropped_add < 0 -%}
+          {%- set dropped_add = 0 -%}
+        {%- endif -%}
+        {%- set _ = rows.append('"%s","%s","%s","%s","%s","%s"'|format(
             inventory_hostname,
             interface,
             queue_key,
