@@ -10,9 +10,9 @@
   delegate_to: localhost
   vars:
     queue_rows: |
-      {%- set rows = [] -%}
       {%- set host_key = inventory_hostname ~ '_' ~ interface -%}
       {%- set hist_interface_data = historical_data.get(host_key, {}) -%}
+      {%- set current_time = lookup('pipe', 'date +%Y-%m-%dT%H:%M:%S%z') -%}
       {%- for queue in range(0, 8) -%}
         {%- set queue_key = 'queue_' ~ queue -%}
         {%- set current_val = 0 -%}
@@ -21,13 +21,5 @@
         {%- if dropped_add < 0 -%}
           {%- set dropped_add = 0 -%}
         {%- endif -%}
-        {%- set row = '"%s","%s","%s","%s","%s","%s"'|format(
-            inventory_hostname,
-            interface,
-            queue_key,
-            current_val,
-            dropped_add,
-            csv_timestamp_value
-          ) -%}
-        {{ row }}
+        "{{ inventory_hostname }}","{{ interface }}","{{ queue_key }}","{{ current_val }}","{{ dropped_add }}","{{ current_time }}"
       {%- endfor -%}
