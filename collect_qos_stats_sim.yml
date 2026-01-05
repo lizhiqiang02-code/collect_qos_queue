@@ -11,13 +11,28 @@
     timestamp: "{{ ansible_date_time.iso8601 }}"
     
   tasks:
+      # 1. 获取时间戳
+    - name: Get current timestamp
+      ansible.builtin.shell:
+        cmd: date -Iseconds
+      register: current_time
+      changed_when: false
+      run_once: yes
+      delegate_to: localhost
+    
+    - name: Set timestamp variable
+      ansible.builtin.set_fact:
+        timestamp: "{{ current_time.stdout }}"
+
+       # 2. 创建输出目录 
     - name: Create output directory
       ansible.builtin.file:
         path: "{{ output_dir }}"
         state: directory
         mode: '0755'
       delegate_to: localhost
-    
+
+      # 3. 初始化或加载历史数据
     - name: Initialize or load historical data
       block:
         - name: Check if historical file exists
@@ -38,31 +53,36 @@
           when: not hist_stat.stat.exists
       
       run_once: yes
-    
+
+      # 4. 初始化 CSV 数据
     - name: Initialize CSV data list
       ansible.builtin.set_fact:
         csv_data: []
       delegate_to: localhost
-    
+
+      # 5. 处理每个接口
     - name: Process each interface
       include_tasks: process_interface_tasks.yml
       loop: "{{ interfaces }}"
       loop_control:
         loop_var: interface
-    
+
+      # 6. 创建 CSV 文件
     - name: Create CSV file with header
       ansible.builtin.copy:
         content: '"Host","Interface","Queue","Dropped","Dropped-Add","Timestamp"\n{{ csv_data | join("\n") }}'
         dest: "{{ output_dir }}/{{ inventory_hostname }}_qos_{{ ansible_date_time.date }}.csv"
         mode: '0644'
       delegate_to: localhost
-    
+
+      # 7. 更新历史数据
     - name: Update historical data for next run
       ansible.builtin.set_fact:
         new_historical_data: "{{ historical_data }}"
       delegate_to: localhost
       run_once: yes
-    
+
+      # 8. 显示完成信息
     - name: Save current values as historical
       ansible.builtin.copy:
         content: "{{ new_historical_data | to_json }}"
