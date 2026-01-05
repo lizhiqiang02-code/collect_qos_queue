@@ -93,3 +93,17 @@
     - name: Display completion message
       debug:
         msg: "Data collected and saved to {{ output_dir }}/{{ inventory_hostname }}_qos_{{ lookup('pipe', 'date +%Y-%m-%d') }}.csv"
+
+    # 8. 将报告传输到远程服务器
+    - name: Transfer CSV report to remote server
+      ansible.builtin.synchronize:
+        src: "{{ output_dir }}/{{ inventory_hostname }}_qos_{{ current_date.stdout }}.csv"
+        dest: "/path/to/reports/on/remote/server/"  # 修改为远程服务器的目标路径
+        mode: push
+      delegate_to: localhost
+      vars:
+        ansible_connection: ssh
+        ansible_user: root  # 远程服务器的用户名
+        ansible_password: 3edc$RFV  # 远程服务器的密码
+        # 或者使用 SSH 密钥
+        # ansible_ssh_private_key_file: /path/to/private/key
