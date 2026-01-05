@@ -4,34 +4,30 @@
     command: "display qos queue statistics interface {{ interface }}"
   register: qos_result
 
-- name: Get current date for filename
-  ansible.builtin.shell:
-    cmd: date +%Y-%m-%d
-  register: file_date
-  changed_when: false
-  delegate_to: localhost
-
-- name: Set current_date_value variable
+- name: Parse output and build CSV rows
   ansible.builtin.set_fact:
-    current_date_value: "{{ file_date.stdout }}"
-
-- name: Create output directory
-  ansible.builtin.file:
-    path: "{{ output_dir }}"
-    state: directory
-    mode: '0755'
+    csv_data: "{{ csv_data + queue_rows }}"
   delegate_to: localhost
-
-- name: Create complete CSV file in one go
-  ansible.builtin.copy:
-    dest: "{{ output_dir }}/{{ inventory_hostname }}_qos_{{ current_date_value }}.csv"
-    content: |
-      "hostname","interface","queue","packets","dropped","timestamp"
-      {% for i in range(0, 8) %}
-      {% set host_key = inventory_hostname ~ '_' ~ interface %}
-      {% set hist_val = historical_data.get(host_key, {}).get('queue_' ~ i, 0) | default(0) %}
-      {% set dropped_add = [0 - hist_val | int, 0] | max %}
-      "{{ inventory_hostname }}","{{ interface }}","queue_{{ i }}","0","{{ dropped_add }}","{{ lookup('pipe', 'date -Iseconds') }}"
-      {% endfor %}
-    mode: '0644'
-  delegate_to: localhost
+  vars:
+    queue_rows: |
+      {%- set rows = [] -%}
+      {%- set host_key = inventory_hostname ~ '_' ~ interface -%}
+      {%- set hist_interface_data = historical_data.get(host_key, {}) -%}
+      {%- for queue in range(0, 8) -%}
+        {%- set queue_key = 'queue_' ~ queue -%}
+        {%- set current_val = 0 -%}
+        {%- set hist_val = hist_interface_data.get(queue_key, 0) -%}
+        {%- set dropped_add = current_val - hist_val -%}
+        {%- if dropped_add < 0 -%}
+          {%- set dropped_add = 0 -%}
+        {%- endif -%}
+        {%- set _ = rows.append('"%s","%s","%s","%s","%s","%s"'|format(
+            inventory_hostname,
+            interface,
+            queue_key,
+            current_val,
+            dropped_add,
+            timestamp
+          )) -%}
+      {%- endfor -%}
+      {{ rows }}
