@@ -1,40 +1,17 @@
----
-- name: Get QoS statistics for interface {{ interface }}
-  ansible.netcommon.cli_command:
-    command: "display qos queue statistics interface {{ interface }}"
-  register: qos_result
-
-- name: Get current date for filename
-  ansible.builtin.shell:
-    cmd: date +%Y-%m-%d
-  register: file_date
-  changed_when: false
-  delegate_to: localhost
-
-- name: Set current_date_value variable
+- name: Generate all CSV data
   ansible.builtin.set_fact:
-    current_date_value: "{{ file_date.stdout }}"
+    all_csv_data: |
+      {% for i in range(0, 8) %}
+      {% set host_key = inventory_hostname ~ '_' ~ interface %}
+      {% set hist_val = historical_data.get(host_key, {}).get('queue_' ~ i, 0) | default(0) %}
+      {% set dropped_add = [0 - hist_val | int, 0] | max %}
+      "{{ inventory_hostname }}","{{ interface }}","queue_{{ i }}","0","{{ dropped_add }}","{{ current_timestamp }}"
+      {% endfor %}
 
-- name: Create output directory
-  ansible.builtin.file:
-    path: "{{ output_dir }}"
-    state: directory
-    mode: '0755'
-  delegate_to: localhost
-
-# 方法三：使用正确的 lineinfile 配置添加数据
-- name: Append CSV data rows
-  ansible.builtin.lineinfile:
+- name: Append all CSV data at once
+  ansible.builtin.blockinfile:
     path: "{{ output_dir }}/{{ inventory_hostname }}_qos_{{ current_date_value }}.csv"
-    line: '{{ csv_line }}'
-    create: yes  # 因为文件已存在
-    insertafter: EOF  # 确保在文件末尾追加
-    state: present
+    block: "{{ all_csv_data }}"
+    insertafter: EOF
+    marker: ""  # 不添加标记
   delegate_to: localhost
-  loop: "{{ range(0, 8) | list }}"
-  vars:
-    csv_line: '"{{ inventory_hostname }}","{{ interface }}","queue_{{ item }}","0","{{ dropped_add }}","{{ timestamp_now }}"'
-    host_key: "{{ inventory_hostname }}_{{ interface }}"
-    hist_val: "{{ historical_data.get(host_key, {}).get('queue_' ~ item, 0) | default(0) }}"
-    dropped_add: "{{ [0 - hist_val | int, 0] | max }}"
-    timestamp_now: "{{ lookup('pipe', 'date -Iseconds') }}"
