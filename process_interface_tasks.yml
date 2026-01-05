@@ -4,21 +4,27 @@
     command: "display qos queue statistics interface {{ interface }}"
   register: qos_result
 
-- name: Generate clean CSV rows for interface {{ interface }}
+- name: Generate CSV rows for this interface
   ansible.builtin.set_fact:
-    csv_data: "{{ csv_data | default([]) + clean_rows }}"
+    interface_rows: []
   delegate_to: localhost
+
+- name: Create row for each queue
+  ansible.builtin.set_fact:
+    interface_rows: "{{ interface_rows + [new_row] }}"
+  delegate_to: localhost
+  loop: "{{ range(0, 8) | list }}"
+  loop_control:
+    loop_var: queue_num
   vars:
-    clean_rows: >-
-      {%- set host_key = inventory_hostname ~ '_' ~ interface -%}
-      {%- set hist_data = historical_data.get(host_key, {}) -%}
-      {%- set timestamp_now = lookup('pipe', 'date -Iseconds') -%}
-      {%- set rows = [] -%}
-      {%- for q in range(8) -%}
-        {%- set q_key = 'queue_' ~ q -%}
-        {%- set hist_val = hist_data.get(q_key, 0) -%}
-        {%- set dropped_add = [0 - hist_val, 0] | max -%}
-        {%- set row = '"' ~ inventory_hostname ~ '","' ~ interface ~ '","' ~ q_key ~ '","0","' ~ dropped_add|string ~ '","' ~ timestamp_now ~ '"' -%}
-        {%- set _ = rows.append(row) -%}
-      {%- endfor -%}
-      {{ rows }}
+    queue_key: "queue_{{ queue_num }}"
+    host_key: "{{ inventory_hostname }}_{{ interface }}"
+    hist_val: "{{ historical_data.get(host_key, {}).get(queue_key, 0) | default(0) }}"
+    dropped_add: "{{ [0 - hist_val | int, 0] | max }}"
+    timestamp_now: "{{ lookup('pipe', 'date -Iseconds') }}"
+    new_row: '{{ [inventory_hostname, interface, queue_key, "0", dropped_add|string, timestamp_now] | map("quote") | join(",") }}'
+
+- name: Add rows to csv_data
+  ansible.builtin.set_fact:
+    csv_data: "{{ csv_data | default([]) + interface_rows }}"
+  delegate_to: localhost
