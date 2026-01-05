@@ -7,6 +7,7 @@
     historical_file: "/runner/project/historical_{{ inventory_hostname }}.json"
     interfaces:
       - "100GE1/1/1"
+      - "100GE1/1/2"
       # 可以添加更多接口
     #timestamp: "{{ ansible_date_time.iso8601 }}"
     
