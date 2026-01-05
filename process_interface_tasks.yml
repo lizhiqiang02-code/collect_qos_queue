@@ -6,25 +6,26 @@
 
 - name: Generate CSV rows for interface {{ interface }}
   ansible.builtin.set_fact:
-    csv_data: "{{ csv_data | default([]) + new_rows }}"
+    csv_data: "{{ csv_data | default([]) + queue_rows }}"
   delegate_to: localhost
   vars:
-    new_rows: >-
+    queue_rows: >-
       {%- set host_key = inventory_hostname ~ '_' ~ interface -%}
       {%- set hist_data = historical_data.get(host_key, {}) -%}
       {%- set timestamp_now = lookup('pipe', 'date -Iseconds') -%}
-      {%- set rows = [] -%}
+      {%- set result = [] -%}
       {%- for q in range(8) -%}
         {%- set q_key = 'queue_' ~ q -%}
         {%- set hist_val = hist_data.get(q_key, 0) -%}
         {%- set dropped_add = [0 - hist_val, 0] | max -%}
         {%- set row = [
-            inventory_hostname | string,
-            interface | string,
-            q_key | string,
-            "0",
-            dropped_add | string,
-            timestamp_now | string
+            inventory_hostname,
+            interface,
+            q_key,
+            '0',
+            dropped_add|string,
+            timestamp_now
           ] | map('regex_replace', '^(.*)$', '"\\1"') | join(',') -%}
-        {{ row }}
+        {%- set _ = result.append(row) -%}
       {%- endfor -%}
+      {{ result }}
