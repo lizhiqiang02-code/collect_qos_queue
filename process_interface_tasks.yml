@@ -19,7 +19,7 @@
   ansible.builtin.lineinfile:
     path: "{{ output_dir }}/{{ inventory_hostname }}_qos_{{ current_date_value }}.csv"
     line: '{{ csv_line }}'
-    create: no
+    create: yes
   delegate_to: localhost
   loop: "{{ range(0, 8) | list }}"
   vars:
