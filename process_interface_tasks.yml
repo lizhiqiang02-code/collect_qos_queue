@@ -11,6 +11,10 @@
   changed_when: false
   delegate_to: localhost
 
+- name: Set current_date_value variable
+  ansible.builtin.set_fact:
+    current_date_value: "{{ file_date.stdout }}"
+
 - name: Append CSV rows to file
   ansible.builtin.lineinfile:
     path: "{{ output_dir }}/{{ inventory_hostname }}_qos_{{ current_date_value }}.csv"
