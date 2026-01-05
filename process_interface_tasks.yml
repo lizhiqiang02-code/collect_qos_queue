@@ -21,13 +21,13 @@
         {%- if dropped_add < 0 -%}
           {%- set dropped_add = 0 -%}
         {%- endif -%}
-        {%- set _ = rows.append('"%s","%s","%s","%s","%s","%s"'|format(
+        {%- set row = '"%s","%s","%s","%s","%s","%s"'|format(
             inventory_hostname,
             interface,
             queue_key,
             current_val,
             dropped_add,
-            timestamp
-          )) -%}
+            csv_timestamp_value
+          ) -%}
+        {{ row }}
       {%- endfor -%}
-      {{ rows }}
