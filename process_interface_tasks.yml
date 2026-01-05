@@ -27,7 +27,7 @@
   ansible.builtin.lineinfile:
     path: "{{ output_dir }}/{{ inventory_hostname }}_qos_{{ current_date_value }}.csv"
     line: '{{ csv_line }}'
-    create: no  # 因为文件已存在
+    create: yes  # 因为文件已存在
     insertafter: EOF  # 确保在文件末尾追加
     state: present
   delegate_to: localhost
