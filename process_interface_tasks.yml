@@ -15,10 +15,6 @@
   ansible.builtin.set_fact:
     current_date_value: "{{ file_date.stdout }}"
 
-- name: Get current timestamp
-  ansible.builtin.set_fact:
-    current_timestamp: "{{ lookup('pipe', 'date -Iseconds') }}"
-
 - name: Create output directory
   ansible.builtin.file:
     path: "{{ output_dir }}"
@@ -26,41 +22,16 @@
     mode: '0755'
   delegate_to: localhost
 
-# 步骤1：创建文件（如果不存在）并添加表头
-- name: Create CSV file with headers if not exists
+- name: Create complete CSV file in one go
   ansible.builtin.copy:
     dest: "{{ output_dir }}/{{ inventory_hostname }}_qos_{{ current_date_value }}.csv"
-    content: '"hostname","interface","queue","packets","dropped","timestamp"'
+    content: |
+      "hostname","interface","queue","packets","dropped","timestamp"
+      {% for i in range(0, 8) %}
+      {% set host_key = inventory_hostname ~ '_' ~ interface %}
+      {% set hist_val = historical_data.get(host_key, {}).get('queue_' ~ i, 0) | default(0) %}
+      {% set dropped_add = [0 - hist_val | int, 0] | max %}
+      "{{ inventory_hostname }}","{{ interface }}","queue_{{ i }}","0","{{ dropped_add }}","{{ lookup('pipe', 'date -Iseconds') }}"
+      {% endfor %}
     mode: '0644'
   delegate_to: localhost
-  when: not lookup('file', output_dir ~ '/' ~ inventory_hostname ~ '_qos_' ~ current_date_value ~ '.csv', errors='ignore')
-
-# 步骤2：调试 - 显示生成的数据
-- name: Debug - Show generated CSV lines
-  ansible.builtin.debug:
-    msg: |
-      CSV Line for queue_{{ item }}:
-      {{ csv_line }}
-  loop: "{{ range(0, 8) | list }}"
-  loop_control:
-    label: "queue_{{ item }}"
-  vars:
-    csv_line: '"{{ inventory_hostname }}","{{ interface }}","queue_{{ item }}","0","{{ dropped_add }}","{{ current_timestamp }}"'
-    host_key: "{{ inventory_hostname }}_{{ interface }}"
-    hist_val: "{{ historical_data.get(host_key, {}).get('queue_' ~ item, 0) | default(0) }}"
-    dropped_add: "{{ [0 - hist_val | int, 0] | max }}"
-
-# 步骤3：追加数据行
-- name: Append CSV data rows
-  ansible.builtin.lineinfile:
-    path: "{{ output_dir }}/{{ inventory_hostname }}_qos_{{ current_date_value }}.csv"
-    line: '{{ csv_line }}'
-    create: no  # 文件必须已存在
-    insertafter: EOF
-  delegate_to: localhost
-  loop: "{{ range(0, 8) | list }}"
-  vars:
-    csv_line: '"{{ inventory_hostname }}","{{ interface }}","queue_{{ item }}","0","{{ dropped_add }}","{{ current_timestamp }}"'
-    host_key: "{{ inventory_hostname }}_{{ interface }}"
-    hist_val: "{{ historical_data.get(host_key, {}).get('queue_' ~ item, 0) | default(0) }}"
-    dropped_add: "{{ [0 - hist_val | int, 0] | max }}"
