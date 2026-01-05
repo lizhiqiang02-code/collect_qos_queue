@@ -55,10 +55,14 @@
         mode: '0644'
       delegate_to: localhost
     
-    # 5. 处理每个接口和队列
+    # 5. 处理每个接口和队列 - 修复版本
     - name: Generate CSV rows for all interfaces and queues
       ansible.builtin.shell: |
+        # 获取时间戳
         timestamp=$(date -Iseconds)
+        
+        # 转换历史数据为 JSON 字符串
+        HIST_JSON='{{ historical_data | to_json }}'
         
         {% for interface in interfaces %}
         # 处理接口 {{ interface }}
@@ -67,14 +71,27 @@
         {% for q in range(8) %}
         # 处理队列 {{ q }}
         queue_key="queue_{{ q }}"
-        # 从历史数据获取值
-        hist_val=$(echo '{{ historical_data | to_json }}' | python3 -c "import json,sys; data=json.load(sys.stdin); print(data.get('$host_key', {}).get('$queue_key', 0))")
+        
+        # 从历史数据获取值 - 使用更安全的方法
+        hist_val=$(echo "$HIST_JSON" | python3 -c "
+import json, sys
+try:
+    data = json.load(sys.stdin)
+    host_data = data.get('$host_key', {})
+    val = host_data.get('$queue_key', 0)
+    print(val)
+except:
+    print(0)
+")
+        
+        # 计算 dropped-add
         dropped_add=$((0 - hist_val))
         if [ $dropped_add -lt 0 ]; then
           dropped_add=0
         fi
         
-        echo '"{{ inventory_hostname }}","{{ interface }}","${queue_key}","0","${dropped_add}","${timestamp}"' >> "{{ output_dir }}/{{ inventory_hostname }}_qos_{{ current_date.stdout }}.csv"
+        # 写入 CSV 行 - 确保正确格式
+        echo '\"{{ inventory_hostname }}\",\"{{ interface }}\",\"'${queue_key}'\",\"0\",\"'${dropped_add}'\",\"'${timestamp}'\"' >> "{{ output_dir }}/{{ inventory_hostname }}_qos_{{ current_date.stdout }}.csv"
         {% endfor %}
         {% endfor %}
       delegate_to: localhost
