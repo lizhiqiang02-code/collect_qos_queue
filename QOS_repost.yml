@@ -1,0 +1,93 @@
+---
+- name: Collect QoS Queue Dropped Statistics for Huawei Switches
+  hosts: all
+  gather_facts: no
+  
+  vars:
+    output_dir: "/runner/project/qos_reports"
+    historical_file: "/runner/project/historical_{{ inventory_hostname }}.json"
+    interfaces:
+      - "100GE1/1/1"
+    
+  tasks:
+    # 1. 获取当前日期
+    - name: Get current date for filename
+      ansible.builtin.shell:
+        cmd: date +%Y-%m-%d
+      register: current_date
+      changed_when: false
+      delegate_to: localhost
+    
+    # 2. 创建输出目录
+    - name: Create output directory
+      ansible.builtin.file:
+        path: "{{ output_dir }}"
+        state: directory
+        mode: '0755'
+      delegate_to: localhost
+    
+    # 3. 初始化或加载历史数据
+    - name: Initialize or load historical data
+      block:
+        - name: Check if historical file exists
+          ansible.builtin.stat:
+            path: "{{ historical_file }}"
+          register: hist_stat
+          delegate_to: localhost
+        
+        - name: Load historical data if exists
+          ansible.builtin.set_fact:
+            historical_data: "{{ lookup('file', historical_file) | from_json }}"
+          delegate_to: localhost
+          when: hist_stat.stat.exists
+        
+        - name: Initialize empty historical data
+          ansible.builtin.set_fact:
+            historical_data: {}
+          when: not hist_stat.stat.exists
+      run_once: yes
+    
+    # 4. 创建 CSV 文件头
+    - name: Create CSV file with header
+      ansible.builtin.copy:
+        content: '"Host","Interface","Queue","Dropped","Dropped-Add","Timestamp"'
+        dest: "{{ output_dir }}/{{ inventory_hostname }}_qos_{{ current_date.stdout }}.csv"
+        mode: '0644'
+      delegate_to: localhost
+    
+    # 5. 处理每个接口和队列
+    - name: Generate CSV rows for all interfaces and queues
+      ansible.builtin.shell: |
+        timestamp=$(date -Iseconds)
+        
+        {% for interface in interfaces %}
+        # 处理接口 {{ interface }}
+        host_key="{{ inventory_hostname }}_{{ interface }}"
+        
+        {% for q in range(8) %}
+        # 处理队列 {{ q }}
+        queue_key="queue_{{ q }}"
+        # 从历史数据获取值
+        hist_val=$(echo '{{ historical_data | to_json }}' | python3 -c "import json,sys; data=json.load(sys.stdin); print(data.get('$host_key', {}).get('$queue_key', 0))")
+        dropped_add=$((0 - hist_val))
+        if [ $dropped_add -lt 0 ]; then
+          dropped_add=0
+        fi
+        
+        echo '"{{ inventory_hostname }}","{{ interface }}","${queue_key}","0","${dropped_add}","${timestamp}"' >> "{{ output_dir }}/{{ inventory_hostname }}_qos_{{ current_date.stdout }}.csv"
+        {% endfor %}
+        {% endfor %}
+      delegate_to: localhost
+    
+    # 6. 保存历史数据
+    - name: Save historical data for next run
+      ansible.builtin.copy:
+        content: "{{ historical_data | to_json }}"
+        dest: "{{ historical_file }}"
+        mode: '0644'
+      delegate_to: localhost
+    
+    # 7. 显示完成信息
+    - name: Display completion message
+      debug:
+        msg: "QoS data collected and saved to {{ output_dir }}/{{ inventory_hostname }}_qos_{{ current_date.stdout }}.csv"
