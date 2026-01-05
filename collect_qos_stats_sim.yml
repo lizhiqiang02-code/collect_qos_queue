@@ -70,7 +70,9 @@
       # 6. 创建 CSV 文件
     - name: Create CSV file with header
       ansible.builtin.copy:
-        content: '"Host","Interface","Queue","Dropped","Dropped-Add","Timestamp"\n{{ csv_data | join("\n") }}'
+        content: |
+          "Host","Interface","Queue","Dropped","Dropped-Add","Timestamp"
+          {{ csv_data | join("\n") }}
         dest: "{{ output_dir }}/{{ inventory_hostname }}_qos_{{ lookup('pipe', 'date +%Y-%m-%d') }}.csv"
         mode: '0644'
       delegate_to: localhost
