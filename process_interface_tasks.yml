@@ -4,6 +4,13 @@
     command: "display qos queue statistics interface {{ interface }}"
   register: qos_result
 
+- name: Get current date for filename
+  ansible.builtin.shell:
+    cmd: date +%Y-%m-%d
+  register: file_date
+  changed_when: false
+  delegate_to: localhost
+  
 - name: Append CSV rows to file
   ansible.builtin.lineinfile:
     path: "{{ output_dir }}/{{ inventory_hostname }}_qos_{{ current_date.stdout }}.csv"
