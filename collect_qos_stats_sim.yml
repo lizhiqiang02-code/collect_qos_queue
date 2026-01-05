@@ -8,7 +8,7 @@
     interfaces:
       - "100GE1/1/1"
       # 可以添加更多接口
-    timestamp: "{{ ansible_date_time.iso8601 }}"
+    #timestamp: "{{ ansible_date_time.iso8601 }}"
     
   tasks:
       # 1. 获取时间戳
@@ -71,7 +71,7 @@
     - name: Create CSV file with header
       ansible.builtin.copy:
         content: '"Host","Interface","Queue","Dropped","Dropped-Add","Timestamp"\n{{ csv_data | join("\n") }}'
-        dest: "{{ output_dir }}/{{ inventory_hostname }}_qos_{{ ansible_date_time.date }}.csv"
+        dest: "{{ output_dir }}/{{ inventory_hostname }}_qos_{{ lookup('pipe', 'date +%Y-%m-%d') }}.csv"
         mode: '0644'
       delegate_to: localhost
 
@@ -92,4 +92,4 @@
     
     - name: Display completion message
       debug:
-        msg: "Data collected and saved to {{ output_dir }}/{{ inventory_hostname }}_qos_{{ ansible_date_time.date }}.csv"
+        msg: "Data collected and saved to {{ output_dir }}/{{ inventory_hostname }}_qos_{{ lookup('pipe', 'date +%Y-%m-%d') }}.csv"
