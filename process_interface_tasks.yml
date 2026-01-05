@@ -1,3 +1,25 @@
+---
+- name: Get QoS statistics for interface {{ interface }}
+  ansible.netcommon.cli_command:
+    command: "display qos queue statistics interface {{ interface }}"
+  register: qos_result
+
+- name: Get current date for filename
+  ansible.builtin.shell:
+    cmd: date +%Y-%m-%d
+  register: file_date
+  changed_when: false
+  delegate_to: localhost
+
+- name: Set current_date_value variable
+  ansible.builtin.set_fact:
+    current_date_value: "{{ file_date.stdout }}"
+
+# 添加这行：定义 current_timestamp 变量
+- name: Get current timestamp
+  ansible.builtin.set_fact:
+    current_timestamp: "{{ lookup('pipe', 'date -Iseconds') }}"
+
 - name: Generate all CSV data
   ansible.builtin.set_fact:
     all_csv_data: |
@@ -8,10 +30,18 @@
       "{{ inventory_hostname }}","{{ interface }}","queue_{{ i }}","0","{{ dropped_add }}","{{ current_timestamp }}"
       {% endfor %}
 
-- name: Append all CSV data at once
-  ansible.builtin.blockinfile:
-    path: "{{ output_dir }}/{{ inventory_hostname }}_qos_{{ current_date_value }}.csv"
-    block: "{{ all_csv_data }}"
-    insertafter: EOF
-    marker: ""  # 不添加标记
+- name: Create output directory
+  ansible.builtin.file:
+    path: "{{ output_dir }}"
+    state: directory
+    mode: '0755'
+  delegate_to: localhost
+
+- name: Create or overwrite CSV file with all data
+  ansible.builtin.copy:
+    dest: "{{ output_dir }}/{{ inventory_hostname }}_qos_{{ current_date_value }}.csv"
+    content: |
+      "hostname","interface","queue","packets","dropped","timestamp"
+      {{ all_csv_data }}
+    mode: '0644'
   delegate_to: localhost
