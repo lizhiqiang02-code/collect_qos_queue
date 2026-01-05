@@ -15,11 +15,21 @@
   ansible.builtin.set_fact:
     current_date_value: "{{ file_date.stdout }}"
 
-- name: Append CSV rows to file
+- name: Create output directory
+  ansible.builtin.file:
+    path: "{{ output_dir }}"
+    state: directory
+    mode: '0755'
+  delegate_to: localhost
+
+# 方法三：使用正确的 lineinfile 配置添加数据
+- name: Append CSV data rows
   ansible.builtin.lineinfile:
     path: "{{ output_dir }}/{{ inventory_hostname }}_qos_{{ current_date_value }}.csv"
     line: '{{ csv_line }}'
-    create: no
+    create: no  # 因为文件已存在
+    insertafter: EOF  # 确保在文件末尾追加
+    state: present
   delegate_to: localhost
   loop: "{{ range(0, 8) | list }}"
   vars:
