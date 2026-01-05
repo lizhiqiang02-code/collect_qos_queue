@@ -10,10 +10,10 @@
   register: file_date
   changed_when: false
   delegate_to: localhost
-  
+
 - name: Append CSV rows to file
   ansible.builtin.lineinfile:
-    path: "{{ output_dir }}/{{ inventory_hostname }}_qos_{{ current_date.stdout }}.csv"
+    path: "{{ output_dir }}/{{ inventory_hostname }}_qos_{{ file_date.stdout }}.csv"
     line: '"{{ inventory_hostname }}","{{ interface }}","queue_{{ item }}","0","{{ [0 - historical_data.get(inventory_hostname ~ \"_\" ~ interface, {}).get(\"queue_\" ~ item, 0) | default(0), 0] | max }}","{{ lookup(\"pipe\", \"date -Iseconds\") }}"'
     create: no
   delegate_to: localhost
