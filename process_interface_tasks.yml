@@ -22,7 +22,7 @@
     hist_val: "{{ historical_data.get(host_key, {}).get(queue_key, 0) | default(0) }}"
     dropped_add: "{{ [0 - hist_val | int, 0] | max }}"
     timestamp_now: "{{ lookup('pipe', 'date -Iseconds') }}"
-    new_row: '{{ [inventory_hostname, interface, queue_key, "0", dropped_add|string, timestamp_now] | map("quote") | join(",") }}'
+    new_row: '"{{ inventory_hostname }}","{{ interface }}","{{ queue_key }}","0","{{ dropped_add }}","{{ timestamp_now }}"'
 
 - name: Add rows to csv_data
   ansible.builtin.set_fact:
