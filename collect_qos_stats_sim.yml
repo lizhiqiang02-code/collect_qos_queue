@@ -130,31 +130,31 @@
               {% endfor %}
             {% else %}
               {# 文件为空，创建新文件 #}
-Host,Interface,Queue,Dropped-Add,{{ new_column }}
-{% for intf in interfaces %}
-{% for q in range(8) %}
-{% set queue = 'queue_' ~ q %}
-{% set value = 0 %}
-{% if current_values[intf] and current_values[intf][queue] %}
-{% set value = current_values[intf][queue] %}
-{% endif %}
-{{ inventory_hostname }},{{ intf }},{{ queue }},0,{{ value }}
-{% endfor %}
-{% endfor %}
+        Host,Interface,Queue,Dropped-Add,{{ new_column }}
+        {% for intf in interfaces %}
+        {% for q in range(8) %}
+        {% set queue = 'queue_' ~ q %}
+        {% set value = 0 %}
+        {% if current_values[intf] and current_values[intf][queue] %}
+        {% set value = current_values[intf][queue] %}
+        {% endif %}
+        {{ inventory_hostname }},{{ intf }},{{ queue }},0,{{ value }}
+        {% endfor %}
+        {% endfor %}
             {% endif %}
           {% else %}
             {# 文件不存在，创建新文件 #}
-Host,Interface,Queue,Dropped-Add,{{ new_column }}
-{% for intf in interfaces %}
-{% for q in range(8) %}
-{% set queue = 'queue_' ~ q %}
-{% set value = 0 %}
-{% if current_values[intf] and current_values[intf][queue] %}
-{% set value = current_values[intf][queue] %}
-{% endif %}
-{{ inventory_hostname }},{{ intf }},{{ queue }},0,{{ value }}
-{% endfor %}
-{% endfor %}
+        Host,Interface,Queue,Dropped-Add,{{ new_column }}
+        {% for intf in interfaces %}
+        {% for q in range(8) %}
+        {% set queue = 'queue_' ~ q %}
+        {% set value = 0 %}
+        {% if current_values[intf] and current_values[intf][queue] %}
+        {% set value = current_values[intf][queue] %}
+        {% endif %}
+        {{ inventory_hostname }},{{ intf }},{{ queue }},0,{{ value }}
+        {% endfor %}
+        {% endfor %}
           {% endif %}
         dest: "{{ output_dir }}/{{ inventory_hostname }}_qos_updated.csv"
         mode: '0644'
