@@ -1,9 +1,8 @@
 ---
-- name: Update QoS CSV with New Timestamp
+- name: Simple QoS CSV Update with Auto-Create
   hosts: all
   gather_facts: no
   vars:
-    output_dir: "/runner/project/qos_reports"
     report_server: "172.20.149.118"
     report_path: "/root/qos_reports"
     historical_file: "{{ report_path }}/{{ inventory_hostname }}_qos.csv"
@@ -23,36 +22,15 @@
         new_timestamp: "{{ current_ts.stdout }}"
         new_column: "Dropped-{{ current_ts.stdout }}"
     
-    # 2. 创建本地目录
-    - name: Create output directory
-      file:
-        path: "{{ output_dir }}"
-        state: directory
-        mode: '0755'
-      delegate_to: localhost
-    
-    # 3. 从远程服务器下载现有CSV
-    - name: Download existing CSV from remote server
-      fetch:
-        src: "{{ historical_file }}"
-        dest: "{{ output_dir }}/{{ inventory_hostname }}_qos.csv"
-        flat: yes
-      delegate_to: "{{ report_server }}"
-      ignore_errors: yes
-      vars:
-        ansible_connection: ssh
-        ansible_user: root
-        ansible_ssh_pass: "3edc$RFV"
-    
-    # 4. 收集当前QoS数据
-    - name: Collect QoS statistics for all interfaces
+    # 2. 收集当前QoS数据
+    - name: Collect QoS statistics
       cli_command:
         command: "display qos queue statistics interface {{ item }}"
       register: qos_results
       loop: "{{ interfaces }}"
     
-    # 5. 创建Python脚本处理所有逻辑
-    - name: Create all-in-one Python script
+    # 3. 创建Python脚本处理所有逻辑
+    - name: Create Python script
       copy:
         content: |
           #!/usr/bin/env python3
@@ -61,194 +39,194 @@
           import sys
           import os
           
-          def parse_qos_output(interface_name, output):
+          def parse_qos_output(output):
               """解析QoS输出，返回队列数据字典"""
               result = {}
-              
-              # 解析8个队列
               for q in range(8):
                   queue_key = f'queue_{q}'
                   value = 0
-                  
-                  # 查找包含队列信息的行
                   for line in output.split('\n'):
                       if f'Queue {q}' in line:
-                          # 使用正则表达式提取数字
                           numbers = re.findall(r'\b\d+\b', line)
                           if numbers:
-                              # 取最后一个数字（通常是丢弃的数据包数）
                               value = int(numbers[-1])
                           break
-                  
                   result[queue_key] = value
-              
               return result
           
-          def process_csv(hostname, interfaces, qos_data_list, new_column, input_file, output_file):
-              """处理CSV文件，添加新列并更新值"""
+          def create_new_csv(hostname, interfaces, qos_data, new_column):
+              """创建新的CSV文件"""
+              headers = ["Host", "Interface", "Queue", "Dropped-Add", new_column]
+              rows = [headers]
               
-              # 读取现有CSV文件
-              rows = []
-              if os.path.exists(input_file):
-                  with open(input_file, 'r') as f:
-                      # 使用简单的行读取，避免空格问题
-                      lines = f.readlines()
-                      for line in lines:
-                          line = line.strip()
-                          if line:
-                              # 分割行并去除每个字段的空格
-                              row = [field.strip() for field in line.split(',')]
-                              rows.append(row)
-              else:
-                  print(f"警告: 输入文件不存在: {input_file}")
-                  return False
+              for interface in interfaces:
+                  for q in range(8):
+                      queue = f"queue_{q}"
+                      value = qos_data.get(interface, {}).get(queue, 0)
+                      rows.append([hostname, interface, queue, "0", str(value)])
               
-              if not rows:
-                  print("错误: CSV文件为空")
-                  return False
-              
+              return rows
+          
+          def update_existing_csv(rows, interfaces, qos_data, new_column):
+              """更新现有的CSV文件"""
               # 添加新列到表头
               rows[0].append(new_column)
               
-              # 创建接口到QoS数据的映射
-              qos_data_map = {}
-              for i, interface in enumerate(interfaces):
-                  if i < len(qos_data_list):
-                      qos_data_map[interface] = qos_data_list[i]
-              
               # 更新数据行
               for i in range(1, len(rows)):
-                  if len(rows[i]) >= 3:  # 至少有Host, Interface, Queue
+                  if len(rows[i]) >= 3:
                       interface = rows[i][1].strip()
                       queue = rows[i][2].strip()
                       
-                      # 获取当前队列值
-                      current_value = 0
-                      if interface in qos_data_map and queue in qos_data_map[interface]:
-                          current_value = qos_data_map[interface][queue]
+                      value = "0"
+                      if interface in qos_data and queue in qos_data[interface]:
+                          value = str(qos_data[interface][queue])
                       
-                      # 添加新值
-                      rows[i].append(str(current_value))
+                      rows[i].append(value)
               
-              # 重新计算Dropped-Add列（第4列，索引3）
-              if len(rows[0]) >= 5:  # 至少有1个时间戳列
-                  # 找出所有时间戳列的索引
+              # 计算Dropped-Add列
+              if len(rows[0]) >= 5:
                   timestamp_indices = []
                   for idx, header in enumerate(rows[0]):
                       if 'Dropped-' in header and header != 'Dropped-Add':
                           timestamp_indices.append(idx)
                   
-                  # 如果有至少2个时间戳列，计算差值
                   if len(timestamp_indices) >= 2:
                       for i in range(1, len(rows)):
                           if len(rows[i]) > max(timestamp_indices[-1], timestamp_indices[-2]):
                               try:
-                                  # 获取最近两个时间戳的值
                                   last_val = int(rows[i][timestamp_indices[-1]])
                                   prev_val = int(rows[i][timestamp_indices[-2]])
-                                  
-                                  # 计算差值
-                                  diff = last_val - prev_val
-                                  if diff < 0:
-                                      diff = 0
-                                  
-                                  # 更新Dropped-Add列（索引3）
+                                  diff = max(0, last_val - prev_val)
                                   if len(rows[i]) > 3:
                                       rows[i][3] = str(diff)
                               except ValueError:
-                                  # 如果转换失败，保持原值
                                   pass
               
-              # 写入新文件
-              with open(output_file, 'w', newline='') as f:
-                  writer = csv.writer(f)
-                  writer.writerows(rows)
-              
-              print(f"成功更新CSV文件: {output_file}")
-              return True
+              return rows
           
           def main():
-              if len(sys.argv) != 8:
-                  print("用法: python3 script.py <hostname> <output_dir> <new_column> <interface1> <interface2> <qos_output1> <qos_output2>")
+              if len(sys.argv) < 8:
+                  print("用法: python3 script.py <hostname> <server> <user> <password> <path> <new_column> <qos1> <qos2>")
                   sys.exit(1)
               
               hostname = sys.argv[1]
-              output_dir = sys.argv[2]
-              new_column = sys.argv[3]
-              interface1 = sys.argv[4]
-              interface2 = sys.argv[5]
+              server = sys.argv[2]
+              user = sys.argv[3]
+              password = sys.argv[4]
+              remote_path = sys.argv[5]
+              new_column = sys.argv[6]
               
-              # 注意：QoS输出可能包含特殊字符，需要小心处理
-              qos_output1 = sys.argv[6].replace('\\n', '\n')
-              qos_output2 = sys.argv[7].replace('\\n', '\n')
+              # 解析QoS数据
+              interfaces = ["100GE1/1/1", "100GE1/1/2"]
+              qos_data = {}
               
-              interfaces = [interface1, interface2]
-              qos_outputs = [qos_output1, qos_output2]
+              for i, interface in enumerate(interfaces):
+                  if i + 7 < len(sys.argv):
+                      output = sys.argv[i + 7].replace('\\n', '\n')
+                      qos_data[interface] = parse_qos_output(output)
               
-              # 解析所有接口的QoS数据
-              qos_data_list = []
-              for interface, output in zip(interfaces, qos_outputs):
-                  qos_data = parse_qos_output(interface, output)
-                  qos_data_list.append(qos_data)
-                  print(f"接口 {interface} 的数据: {qos_data}")
+              print(f"解析的QoS数据: {qos_data}")
               
-              input_file = os.path.join(output_dir, f"{hostname}_qos.csv")
-              output_file = os.path.join(output_dir, f"{hostname}_qos_final.csv")
+              # 尝试使用ssh命令获取文件
+              import subprocess
               
-              # 处理CSV
-              success = process_csv(hostname, interfaces, qos_data_list, new_column, input_file, output_file)
+              # 首先检查文件是否存在
+              check_cmd = f"sshpass -p '{password}' ssh -o StrictHostKeyChecking=no {user}@{server} 'test -f {remote_path} && echo exists || echo not_exists'"
               
-              if not success:
+              try:
+                  result = subprocess.run(check_cmd, shell=True, capture_output=True, text=True)
+                  file_exists = "exists" in result.stdout.strip()
+                  print(f"文件存在检查: {result.stdout.strip()}")
+              except Exception as e:
+                  print(f"检查文件存在时出错: {e}")
+                  file_exists = False
+              
+              if not file_exists:
+                  print(f"文件不存在，创建新文件: {remote_path}")
+                  rows = create_new_csv(hostname, interfaces, qos_data, new_column)
+              else:
+                  print(f"文件存在，下载并更新: {remote_path}")
+                  # 下载文件
+                  download_cmd = f"sshpass -p '{password}' scp -o StrictHostKeyChecking=no {user}@{server}:{remote_path} /tmp/temp_qos.csv"
+                  try:
+                      subprocess.run(download_cmd, shell=True, check=True)
+                      
+                      # 读取文件
+                      rows = []
+                      with open('/tmp/temp_qos.csv', 'r') as f:
+                          for line in f:
+                              if line.strip():
+                                  cleaned = [field.strip() for field in line.split(',')]
+                                  rows.append(cleaned)
+                      
+                      rows = update_existing_csv(rows, interfaces, qos_data, new_column)
+                      
+                  except Exception as e:
+                      print(f"下载或读取文件时出错: {e}")
+                      # 如果出错，也创建新文件
+                      rows = create_new_csv(hostname, interfaces, qos_data, new_column)
+              
+              # 保存到本地临时文件
+              temp_file = '/tmp/qos_updated.csv'
+              with open(temp_file, 'w', newline='') as f:
+                  writer = csv.writer(f)
+                  writer.writerows(rows)
+              
+              # 上传到远程服务器
+              upload_cmd = f"sshpass -p '{password}' scp -o StrictHostKeyChecking=no {temp_file} {user}@{server}:{remote_path}"
+              try:
+                  subprocess.run(upload_cmd, shell=True, check=True)
+                  print(f"成功上传文件到: {server}:{remote_path}")
+                  
+                  # 显示文件内容预览
+                  print("\n文件内容预览:")
+                  print("=" * 50)
+                  for i, row in enumerate(rows[:5]):  # 只显示前5行
+                      print(','.join(row))
+                  if len(rows) > 5:
+                      print("...")
+                  print(f"总共 {len(rows)} 行")
+                  print("=" * 50)
+                  
+              except Exception as e:
+                  print(f"上传文件时出错: {e}")
                   sys.exit(1)
           
           if __name__ == "__main__":
               main()
-        dest: "/tmp/qos_csv_processor.py"
+        dest: "/tmp/update_qos_final.py"
         mode: '0755'
       delegate_to: localhost
     
-    # 6. 运行Python脚本处理CSV
-    - name: Run CSV processor
+    # 4. 运行Python脚本
+    - name: Run update script
       shell: |
-        python3 /tmp/qos_csv_processor.py \
+        python3 /tmp/update_qos_final.py \
           "{{ inventory_hostname }}" \
-          "{{ output_dir }}" \
+          "{{ report_server }}" \
+          "root" \
+          "3edc\$RFV" \
+          "{{ historical_file }}" \
           "{{ new_column }}" \
-          "{{ interfaces[0] }}" \
-          "{{ interfaces[1] }}" \
           "{{ qos_results.results[0].stdout | replace('\n', '\\n') | replace('"', '\\"') }}" \
           "{{ qos_results.results[1].stdout | replace('\n', '\\n') | replace('"', '\\"') }}"
       args:
         executable: /bin/bash
-      register: processor_result
+      register: script_result
       delegate_to: localhost
     
-    # 7. 调试显示处理结果
-    - name: Debug processor result
+    # 5. 显示脚本输出
+    - name: Show script output
       debug:
-        var: processor_result.stdout_lines
-      delegate_to: localhost
+        var: script_result.stdout_lines
     
-    # 8. 上传最终文件到远程服务器
-    - name: Upload final CSV to remote server
-      copy:
-        src: "{{ output_dir }}/{{ inventory_hostname }}_qos_final.csv"
-        dest: "{{ historical_file }}"
-        owner: root
-        group: root
-        mode: '0644'
-      delegate_to: "{{ report_server }}"
-      vars:
-        ansible_connection: ssh
-        ansible_user: root
-        ansible_ssh_pass: "3edc$RFV"
-    
-    # 9. 显示结果
+    # 6. 显示完成消息
     - name: Show completion message
       debug:
         msg: |
-          QoS CSV updated successfully!
-          - Device: {{ inventory_hostname }}
-          - New timestamp: {{ new_timestamp }}
-          - New column: {{ new_column }}
-          - File: {{ report_server }}:{{ historical_file }}
+          QoS CSV更新完成！
+          - 设备: {{ inventory_hostname }}
+          - 新时间戳: {{ new_timestamp }}
+          - 新列名: {{ new_column }}
+          - 文件位置: {{ report_server }}:{{ historical_file }}
