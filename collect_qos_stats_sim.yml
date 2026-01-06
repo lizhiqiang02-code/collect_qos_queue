@@ -47,37 +47,37 @@
     
     - name: Extract dropped values for each interface
       set_fact:
-        parsed_qos_data: "{{ parsed_qos_data | combine({ interface_name: extract_dropped(interface_output) }) }}"
+        parsed_qos_data: "{{ parsed_qos_data | combine({ interface_name: queue_stats }) }}"
       loop: "{{ qos_output.results }}"
       delegate_to: localhost
       vars:
         interface_name: "{{ item.item }}"
         interface_output: "{{ item.stdout }}"
-        extract_dropped: |
-          {% macro extract(text) %}
-            {% set result = {} %}
-            {% for queue_num in range(8) %}
-              {% set queue_key = 'queue_' ~ queue_num %}
-              {% set pattern = 'Queue\\s+' ~ queue_num ~ '.*?(\\d+)' %}
-              {% set matches = [] %}
-              {% for line in text.split('\n') %}
-                {% if line is search('Queue\\s+' ~ queue_num) %}
-                  {% set parts = line.split() %}
-                  {% set last_num = parts[-1] %}
-                  {% if last_num is number %}
-                    {% set matches = [last_num] %}
-                  {% endif %}
-                {% endif %}
-              {% endfor %}
-              {% if matches and matches[0] %}
-                {% set _ = result.update({queue_key: matches[0] | int}) %}
-              {% else %}
-                {% set _ = result.update({queue_key: 0}) %}
-              {% endif %}
-            {% endfor %}
-            {{ result }}
-          {% endmacro %}
-          {{ extract(interface_output) }}
+        queue_stats: >-
+          {%- set result = {} -%}
+          {%- set lines = interface_output.split('\n') -%}
+          {%- for queue_num in range(8) -%}
+            {%- set queue_key = 'queue_' ~ queue_num -%}
+            {%- set queue_found = false -%}
+            {%- set dropped_value = 0 -%}
+            {%- for line in lines -%}
+              {%- if 'Queue ' ~ queue_num in line -%}
+                {%- set parts = line.split() -%}
+                {%- for part in parts -%}
+                  {%- if part | int != 0 or part == '0' -%}
+                    {%- set dropped_value = part | int -%}
+                    {%- set queue_found = true -%}
+                    {%- break -%}
+                  {%- endif -%}
+                {%- endfor -%}
+                {%- if queue_found -%}
+                  {%- break -%}
+                {%- endif -%}
+              {%- endif -%}
+            {%- endfor -%}
+            {%- set _ = result.update({queue_key: dropped_value}) -%}
+          {%- endfor -%}
+          {{ result }}
     
     # 5. 从远程服务器获取历史CSV
     - name: Download historical CSV
