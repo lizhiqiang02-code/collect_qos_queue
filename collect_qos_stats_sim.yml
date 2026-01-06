@@ -121,26 +121,62 @@
       register: file_stat
       delegate_to: localhost
     
-    # 9. 直接创建CSV文件（简化版本） - 修复缩进
-    - name: Create CSV file directly
+    # 9. 分步创建CSV - 避免复杂模板
+    - name: Create CSV header
+      set_fact:
+        csv_header: "Host,Interface,Queue,{{ timestamp_column }}"
+      delegate_to: localhost
+    
+    - name: Generate CSV data rows
+      set_fact:
+        csv_rows: []
+      delegate_to: localhost
+    
+    - name: Add rows for first interface
+      set_fact:
+        csv_rows: "{{ csv_rows + interface_rows }}"
+      delegate_to: localhost
+      vars:
+        interface_rows: >-
+          {%- set rows = [] -%}
+          {%- set intf = '100GE1/1/1' -%}
+          {%- for q in range(8) -%}
+            {%- set queue = 'queue_' ~ q -%}
+            {%- set value = 0 -%}
+            {%- if parsed_qos_data[intf] and parsed_qos_data[intf][queue] -%}
+              {%- set value = parsed_qos_data[intf][queue] -%}
+            {%- endif -%}
+            {%- set rows = rows + [inventory_hostname ~ ',' ~ intf ~ ',' ~ queue ~ ',' ~ value] -%}
+          {%- endfor -%}
+          {{ rows }}
+    
+    - name: Add rows for second interface
+      set_fact:
+        csv_rows: "{{ csv_rows + interface_rows }}"
+      delegate_to: localhost
+      vars:
+        interface_rows: >-
+          {%- set rows = [] -%}
+          {%- set intf = '100GE1/1/2' -%}
+          {%- for q in range(8) -%}
+            {%- set queue = 'queue_' ~ q -%}
+            {%- set value = 0 -%}
+            {%- if parsed_qos_data[intf] and parsed_qos_data[intf][queue] -%}
+              {%- set value = parsed_qos_data[intf][queue] -%}
+            {%- endif -%}
+            {%- set rows = rows + [inventory_hostname ~ ',' ~ intf ~ ',' ~ queue ~ ',' ~ value] -%}
+          {%- endfor -%}
+          {{ rows }}
+    
+    # 10. 创建CSV文件
+    - name: Create CSV file
       copy:
-        content: |-
-Host,Interface,Queue,{{ timestamp_column }}
-{% for intf in interfaces %}
-{% for q in range(8) %}
-{% set queue = 'queue_' ~ q %}
-{% set value = 0 %}
-{% if parsed_qos_data[intf] and parsed_qos_data[intf][queue] %}
-{% set value = parsed_qos_data[intf][queue] %}
-{% endif %}
-{{ inventory_hostname }},{{ intf }},{{ queue }},{{ value }}
-{% endfor %}
-{% endfor %}
+        content: "{{ csv_header }}\n{{ csv_rows | join('\n') }}"
         dest: "{{ output_dir }}/{{ inventory_hostname }}_qos.csv"
         mode: '0644'
       delegate_to: localhost
     
-    # 10. 上传到远程
+    # 11. 上传到远程
     - name: Upload to remote server
       copy:
         src: "{{ output_dir }}/{{ inventory_hostname }}_qos.csv"
@@ -154,7 +190,7 @@ Host,Interface,Queue,{{ timestamp_column }}
         ansible_user: root
         ansible_ssh_pass: "3edc$RFV"
     
-    # 11. 显示结果
+    # 12. 显示结果
     - name: Show result
       debug:
         msg: |
