@@ -1,5 +1,5 @@
 ---
-- name: Collect QoS Queue Dropped Statistics for Huawei Switches
+- name: QoS Collection with File Update
   hosts: all
   gather_facts: no
   vars:
@@ -7,75 +7,29 @@
     report_server: "172.20.149.118"
     report_path: "/root/qos_reports"
     historical_file: "{{ report_path }}/{{ inventory_hostname }}_qos.csv"
-    interfaces:
-      - "100GE1/1/1"
-      - "100GE1/1/2"
   
   tasks:
     # 1. 获取时间戳
     - name: Get timestamp
       shell: date +"%Y-%m-%dT%H:%M:%S"
-      register: ts_result
+      register: ts
       delegate_to: localhost
     
-    - name: Set timestamp
+    - name: Set column name
       set_fact:
-        ts_value: "{{ ts_result.stdout }}"
-        ts_column: "Dropped-{{ ts_result.stdout }}"
+        new_column: "Dropped-{{ ts.stdout }}"
     
-    # 2. 创建目录
-    - name: Create directory
-      file:
-        path: "{{ output_dir }}"
-        state: directory
-        mode: '0755'
-      delegate_to: localhost
-    
-    # 3. 收集QoS数据
-    - name: Collect QoS for 100GE1/1/1
+    # 2. 收集数据
+    - name: Collect QoS data
       cli_command:
         command: "display qos queue statistics interface 100GE1/1/1"
-      register: qos_intf1
+      register: qos_data
     
-    - name: Collect QoS for 100GE1/1/2
-      cli_command:
-        command: "display qos queue statistics interface 100GE1/1/2"
-      register: qos_intf2
-    
-    # 4. 解析QoS数据
-    - name: Parse QoS data
-      set_fact:
-        current_data: "{{ {'100GE1/1/1': parse_qos(qos_intf1.stdout), '100GE1/1/2': parse_qos(qos_intf2.stdout)} }}"
-      delegate_to: localhost
-      vars:
-        parse_qos: |
-          {% macro parse(text) %}
-            {% set result = {} %}
-            {% for q in range(8) %}
-              {% set queue = 'queue_' ~ q %}
-              {% set value = 0 %}
-              {% for line in text.split('\n') %}
-                {% if line is search('Queue ' ~ q) %}
-                  {% set parts = line.split() %}
-                  {% for i in range(parts|length - 1, -1, -1) %}
-                    {% set part = parts[i] %}
-                    {% if part is match('^[0-9]+$') %}
-                      {% set value = part|int %}
-                    {% endif %}
-                  {% endfor %}
-                {% endif %}
-              {% endfor %}
-              {% set _ = result.update({queue: value}) %}
-            {% endfor %}
-            {{ result }}
-          {% endmacro %}
-          {{ parse(text) }}
-    
-    # 5. 下载历史CSV文件
-    - name: Download historical CSV
+    # 3. 下载现有文件
+    - name: Download existing CSV
       fetch:
         src: "{{ historical_file }}"
-        dest: "{{ output_dir }}/temp_{{ inventory_hostname }}_qos.csv"
+        dest: "{{ output_dir }}/existing_{{ inventory_hostname }}_qos.csv"
         flat: yes
       delegate_to: "{{ report_server }}"
       ignore_errors: yes
@@ -84,187 +38,129 @@
         ansible_user: root
         ansible_ssh_pass: "3edc$RFV"
     
-    # 6. 检查文件是否存在
-    - name: Check if file exists
+    # 4. 检查文件是否存在
+    - name: Check file existence
       stat:
-        path: "{{ output_dir }}/temp_{{ inventory_hostname }}_qos.csv"
-      register: csv_stat
+        path: "{{ output_dir }}/existing_{{ inventory_hostname }}_qos.csv"
+      register: file_check
       delegate_to: localhost
     
-    # 7. 创建或更新CSV
+    # 5. 创建或更新CSV
     - name: Create or update CSV
       copy:
-        content: |
-          {% if csv_stat.stat.exists %}
+        content: |-
+          {% if file_check.stat.exists %}
             {# 读取现有文件 #}
-            {% set csv_content = lookup('file', output_dir + '/temp_' + inventory_hostname + '_qos.csv') %}
-            {% if csv_content and csv_content.strip() %}
-              {# 解析现有CSV #}
-              {% set lines = [] %}
-              {% for line in csv_content.strip().split('\n') %}
-                {% if line.strip() %}
-                  {% set lines = lines + [line.strip()] %}
-                {% endif %}
-              {% endfor %}
-              
+            {% set existing = lookup('file', output_dir + '/existing_' + inventory_hostname + '_qos.csv') %}
+            {% if existing and existing.strip() %}
+              {% set lines = existing.strip().split('\n') %}
               {% set header = lines[0] %}
-              {% set data_lines = lines[1:] %}
+              {% set data = lines[1:] %}
               
-              {# 检查是否已有当前时间戳列 #}
-              {% set header_parts = header.split(',') %}
-              {% set has_column = false %}
-              {% set col_index = -1 %}
-              {% for i in range(header_parts|length) %}
-                {% if header_parts[i] == ts_column %}
-                  {% set has_column = true %}
-                  {% set col_index = i %}
-                {% endif %}
-              {% endfor %}
-              
-              {# 输出表头 #}
-              {% if has_column %}
+              {# 检查是否已有该列 #}
+              {% if new_column in header %}
                 {{ header }}
-              {% else %}
-                {{ header }},{{ ts_column }}
-              {% endif %}
-              
-              {# 处理数据行 #}
-              {% for line in data_lines %}
-                {% set row_parts = line.split(',') %}
-                {% set interface = row_parts[1] %}
-                {% set queue = row_parts[2] %}
-                
-                {# 获取当前值 #}
-                {% set current_value = 0 %}
-                {% if current_data[interface] and current_data[interface][queue] %}
-                  {% set current_value = current_data[interface][queue] %}
-                {% endif %}
-                
-                {# 更新或添加列 #}
-                {% if has_column %}
-                  {# 更新现有列 #}
-                  {% if col_index < row_parts|length %}
-                    {% set row_parts[col_index] = current_value|string %}
+                {% for line in data %}
+                  {% set row = line.split(',') %}
+                  {% set interface = row[1] %}
+                  {% set queue = row[2] %}
+                  
+                  {# 获取新值 #}
+                  {% set new_value = 0 %}
+                  {% for q in range(8) %}
+                    {% if queue == 'queue_' ~ q %}
+                      {% for line2 in qos_data.stdout_lines %}
+                        {% if 'Queue ' ~ q in line2 %}
+                          {% set parts = line2.split() %}
+                          {% for part in parts %}
+                            {% if part == '0' or part|int > 0 %}
+                              {% set new_value = part|int %}
+                            {% endif %}
+                          {% endfor %}
+                        {% endif %}
+                      {% endfor %}
+                    {% endif %}
+                  {% endfor %}
+                  
+                  {# 更新该列 #}
+                  {% set col_index = header.split(',') | index(new_column) %}
+                  {% if col_index >= 0 and col_index < row|length %}
+                    {% set row[col_index] = new_value|string %}
                   {% endif %}
-                  {{ row_parts|join(',') }}
-                {% else %}
-                  {# 添加新列 #}
-                  {{ line }},{{ current_value }}
-                {% endif %}
-              {% endfor %}
+                  {{ row|join(',') }}
+                {% endfor %}
+              {% else %}
+                {# 添加新列 #}
+                {{ header }},{{ new_column }}
+                {% for line in data %}
+                  {% set row = line.split(',') %}
+                  {% set interface = row[1] %}
+                  {% set queue = row[2] %}
+                  
+                  {# 获取新值 #}
+                  {% set new_value = 0 %}
+                  {% for q in range(8) %}
+                    {% if queue == 'queue_' ~ q %}
+                      {% for line2 in qos_data.stdout_lines %}
+                        {% if 'Queue ' ~ q in line2 %}
+                          {% set parts = line2.split() %}
+                          {% for part in parts %}
+                            {% if part == '0' or part|int > 0 %}
+                              {% set new_value = part|int %}
+                            {% endif %}
+                          {% endfor %}
+                        {% endif %}
+                      {% endfor %}
+                    {% endif %}
+                  {% endfor %}
+                  
+                  {{ line }},{{ new_value }}
+                {% endfor %}
+              {% endif %}
             {% else %}
               {# 文件为空，创建新文件 #}
-              Host,Interface,Queue,{{ ts_column }}
-              {% for intf in interfaces %}
-                {% for q in range(8) %}
-                  {% set queue = 'queue_' ~ q %}
-                  {% set value = 0 %}
-                  {% if current_data[intf] and current_data[intf][queue] %}
-                    {% set value = current_data[intf][queue] %}
-                  {% endif %}
-                  {{ inventory_hostname }},{{ intf }},{{ queue }},{{ value }}
-                {% endfor %}
-              {% endfor %}
+Host,Interface,Queue,{{ new_column }}
+{% for q in range(8) %}
+{% set value = 0 %}
+{% for line in qos_data.stdout_lines %}
+{% if 'Queue ' ~ q in line %}
+{% set parts = line.split() %}
+{% for part in parts %}
+{% if part == '0' or part|int > 0 %}
+{% set value = part|int %}
+{% endif %}
+{% endfor %}
+{% endif %}
+{% endfor %}
+{{ inventory_hostname }},100GE1/1/1,queue_{{ q }},{{ value }}
+{% endfor %}
             {% endif %}
           {% else %}
             {# 文件不存在，创建新文件 #}
-            Host,Interface,Queue,{{ ts_column }}
-            {% for intf in interfaces %}
-              {% for q in range(8) %}
-                {% set queue = 'queue_' ~ q %}
-                {% set value = 0 %}
-                {% if current_data[intf] and current_data[intf][queue] %}
-                  {% set value = current_data[intf][queue] %}
-                {% endif %}
-                {{ inventory_hostname }},{{ intf }},{{ queue }},{{ value }}
-              {% endfor %}
-            {% endfor %}
+Host,Interface,Queue,{{ new_column }}
+{% for q in range(8) %}
+{% set value = 0 %}
+{% for line in qos_data.stdout_lines %}
+{% if 'Queue ' ~ q in line %}
+{% set parts = line.split() %}
+{% for part in parts %}
+{% if part == '0' or part|int > 0 %}
+{% set value = part|int %}
+{% endif %}
+{% endfor %}
+{% endif %}
+{% endfor %}
+{{ inventory_hostname }},100GE1/1/1,queue_{{ q }},{{ value }}
+{% endfor %}
           {% endif %}
         dest: "{{ output_dir }}/{{ inventory_hostname }}_qos.csv"
         mode: '0644'
       delegate_to: localhost
     
-    # 8. 添加Dropped-Add列
-    - name: Add Dropped-Add column
+    # 6. 上传更新后的文件
+    - name: Upload updated CSV
       copy:
-        content: |
-          {% set csv_content = lookup('file', output_dir + '/' + inventory_hostname + '_qos.csv') %}
-          {% if csv_content and csv_content.strip() %}
-            {% set lines = [] %}
-            {% for line in csv_content.strip().split('\n') %}
-              {% if line.strip() %}
-                {% set lines = lines + [line.strip()] %}
-              {% endif %}
-            {% endfor %}
-            
-            {% set header = lines[0] %}
-            {% set data_lines = lines[1:] %}
-            
-            {# 分离列 #}
-            {% set header_parts = header.split(',') %}
-            {% set base_columns = [] %}
-            {% set dropped_columns = [] %}
-            {% set dropped_indices = [] %}
-            
-            {% for i in range(header_parts|length) %}
-              {% if header_parts[i] is search('Dropped-') %}
-                {% set dropped_columns = dropped_columns + [header_parts[i]] %}
-                {% set dropped_indices = dropped_indices + [i] %}
-              {% else %}
-                {% set base_columns = base_columns + [header_parts[i]] %}
-              {% endif %}
-            {% endfor %}
-            
-            {# 构建新表头 #}
-            {% set new_header = base_columns + ['Dropped-Add'] + dropped_columns %}
-            {{ new_header|join(',') }}
-            
-            {# 处理数据行 #}
-            {% for line in data_lines %}
-              {% set row_parts = line.split(',') %}
-              {% set base_values = [] %}
-              {% set dropped_values = [] %}
-              
-              {# 分离值 #}
-              {% for i in range(header_parts|length) %}
-                {% if i in dropped_indices %}
-                  {% set val = 0 %}
-                  {% if i < row_parts|length %}
-                    {% set val = row_parts[i]|default('0')|int %}
-                  {% endif %}
-                  {% set dropped_values = dropped_values + [val] %}
-                {% else %}
-                  {% if i < row_parts|length %}
-                    {% set base_values = base_values + [row_parts[i]] %}
-                  {% else %}
-                    {% set base_values = base_values + [''] %}
-                  {% endif %}
-                {% endif %}
-              {% endfor %}
-              
-              {# 计算增量 #}
-              {% set add_value = 0 %}
-              {% if dropped_values|length >= 2 %}
-                {% set last = dropped_values[-1] %}
-                {% set prev = dropped_values[-2] %}
-                {% set add_value = last - prev %}
-                {% if add_value < 0 %}
-                  {% set add_value = 0 %}
-                {% endif %}
-              {% endif %}
-              
-              {# 输出行 #}
-              {{ (base_values + [add_value|string] + dropped_values)|join(',') }}
-            {% endfor %}
-          {% endif %}
-        dest: "{{ output_dir }}/{{ inventory_hostname }}_qos_final.csv"
-        mode: '0644'
-      delegate_to: localhost
-    
-    # 9. 上传最终文件到远程
-    - name: Upload final CSV
-      copy:
-        src: "{{ output_dir }}/{{ inventory_hostname }}_qos_final.csv"
+        src: "{{ output_dir }}/{{ inventory_hostname }}_qos.csv"
         dest: "{{ historical_file }}"
         owner: root
         group: root
@@ -274,10 +170,3 @@
         ansible_connection: ssh
         ansible_user: root
         ansible_ssh_pass: "3edc$RFV"
-    
-    # 10. 显示结果
-    - name: Show result
-      debug:
-        msg: |
-          QoS collection completed for {{ inventory_hostname }}
-          File saved to: {{ report_server }}:{{ historical_file }}
