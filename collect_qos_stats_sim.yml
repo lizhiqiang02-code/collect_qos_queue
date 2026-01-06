@@ -121,7 +121,7 @@
       register: file_stat
       delegate_to: localhost
     
-    # 9. 更新CSV文件 - 添加新时间戳列
+    # 9. 更新CSV文件 - 使用字符串拼接代替列表
     - name: Update CSV with new timestamp column
       copy:
         content: |-
@@ -129,16 +129,28 @@
             {# 读取现有CSV文件 #}
             {% set csv_content = lookup('file', output_dir + '/temp_' + inventory_hostname + '_qos.csv') %}
             {% if csv_content and csv_content.strip() %}
-              {# 解析现有CSV #}
-              {% set lines = [] %}
-              {% for line in csv_content.strip().split('\n') %}
-                {% if line.strip() %}
-                  {% set lines = lines + [line.strip()] %}
+              {# 解析现有CSV - 不使用列表 #}
+              {% set line_count = 0 %}
+              {% set header_line = '' %}
+              {% set data_lines_str = '' %}
+              
+              {% for csv_line in csv_content.strip().split('\n') %}
+                {% if csv_line.strip() %}
+                  {% if line_count == 0 %}
+                    {% set header_line = csv_line.strip() %}
+                  {% else %}
+                    {% if data_lines_str == '' %}
+                      {% set data_lines_str = csv_line.strip() %}
+                    {% else %}
+                      {% set data_lines_str = data_lines_str + '|||' + csv_line.strip() %}
+                    {% endif %}
+                  {% endif %}
+                  {% set line_count = line_count + 1 %}
                 {% endif %}
               {% endfor %}
               
-              {% set header = lines[0] %}
-              {% set data_lines = lines[1:] %}
+              {% set header = header_line %}
+              {% set data_lines = data_lines_str.split('|||') %}
               
               {# 检查是否已有当前时间戳列 #}
               {% set header_parts = header.split(',') %}
@@ -169,7 +181,7 @@
                     
                     {# 更新该列的值 #}
                     {% if col_index < row_parts|length %}
-                      {% set row_parts[col_index] = current_value|string %}
+                      {% set row_parts = row_parts[:col_index] + [current_value|string] + row_parts[col_index+1:] %}
                     {% endif %}
                     {{ row_parts|join(',') }}
                   {% endif %}
@@ -195,101 +207,121 @@
               {% endif %}
             {% else %}
               {# 文件为空，创建新文件 #}
-              Host,Interface,Queue,{{ timestamp_column }}
-              {% for intf in interfaces %}
-                {% for q in range(8) %}
-                  {% set queue = 'queue_' ~ q %}
-                  {% set value = 0 %}
-                  {% if parsed_qos_data[intf] and parsed_qos_data[intf][queue] %}
-                    {% set value = parsed_qos_data[intf][queue] %}
-                  {% endif %}
-                  {{ inventory_hostname }},{{ intf }},{{ queue }},{{ value }}
-                {% endfor %}
-              {% endfor %}
+Host,Interface,Queue,{{ timestamp_column }}
+{% for intf in interfaces %}
+{% for q in range(8) %}
+{% set queue = 'queue_' ~ q %}
+{% set value = 0 %}
+{% if parsed_qos_data[intf] and parsed_qos_data[intf][queue] %}
+{% set value = parsed_qos_data[intf][queue] %}
+{% endif %}
+{{ inventory_hostname }},{{ intf }},{{ queue }},{{ value }}
+{% endfor %}
+{% endfor %}
             {% endif %}
           {% else %}
             {# 文件不存在，创建新文件 #}
-            Host,Interface,Queue,{{ timestamp_column }}
-            {% for intf in interfaces %}
-              {% for q in range(8) %}
-                {% set queue = 'queue_' ~ q %}
-                {% set value = 0 %}
-                {% if parsed_qos_data[intf] and parsed_qos_data[intf][queue] %}
-                  {% set value = parsed_qos_data[intf][queue] %}
-                {% endif %}
-                {{ inventory_hostname }},{{ intf }},{{ queue }},{{ value }}
-              {% endfor %}
-            {% endfor %}
+Host,Interface,Queue,{{ timestamp_column }}
+{% for intf in interfaces %}
+{% for q in range(8) %}
+{% set queue = 'queue_' ~ q %}
+{% set value = 0 %}
+{% if parsed_qos_data[intf] and parsed_qos_data[intf][queue] %}
+{% set value = parsed_qos_data[intf][queue] %}
+{% endif %}
+{{ inventory_hostname }},{{ intf }},{{ queue }},{{ value }}
+{% endfor %}
+{% endfor %}
           {% endif %}
         dest: "{{ output_dir }}/{{ inventory_hostname }}_qos_updated.csv"
         mode: '0644'
       delegate_to: localhost
     
-    # 10. 添加Dropped-Add列并重新排序
-    - name: Add Dropped-Add column and reorder
+    # 10. 添加Dropped-Add列 - 简化版本
+    - name: Add Dropped-Add column simplified
       copy:
         content: |-
           {% set csv_content = lookup('file', output_dir + '/' + inventory_hostname + '_qos_updated.csv') %}
           {% if csv_content and csv_content.strip() %}
-            {# 清理和解析CSV内容 #}
-            {% set lines = [] %}
-            {% for line in csv_content.strip().split('\n') %}
-              {% if line.strip() %}
-                {% set lines = lines + [line.strip()] %}
+            {# 清理CSV内容 #}
+            {% set lines_str = '' %}
+            {% for csv_line in csv_content.strip().split('\n') %}
+              {% if csv_line.strip() %}
+                {% if lines_str == '' %}
+                  {% set lines_str = csv_line.strip() %}
+                {% else %}
+                  {% set lines_str = lines_str + '|||' + csv_line.strip() %}
+                {% endif %}
               {% endif %}
             {% endfor %}
             
+            {% set lines = lines_str.split('|||') %}
+            
+            {# 处理表头 #}
             {% set header = lines[0] %}
-            {% set data_lines = lines[1:] %}
+            {% set header_parts = header.split(',') %}
             
             {# 分离基础列和时间戳列 #}
-            {% set header_parts = header.split(',') %}
-            {% set base_columns = [] %}
-            {% set timestamp_columns = [] %}
-            {% set timestamp_indices = [] %}
+            {% set base_columns_str = '' %}
+            {% set timestamp_columns_str = '' %}
+            {% set timestamp_indices_str = '' %}
             
             {% for i in range(header_parts|length) %}
               {% if header_parts[i] is search('Dropped-') %}
-                {% set timestamp_columns = timestamp_columns + [header_parts[i]] %}
-                {% set timestamp_indices = timestamp_indices + [i] %}
+                {% if timestamp_columns_str == '' %}
+                  {% set timestamp_columns_str = header_parts[i] %}
+                {% else %}
+                  {% set timestamp_columns_str = timestamp_columns_str + '|||' + header_parts[i] %}
+                {% endif %}
+                {% if timestamp_indices_str == '' %}
+                  {% set timestamp_indices_str = i|string %}
+                {% else %}
+                  {% set timestamp_indices_str = timestamp_indices_str + '|||' + i|string %}
+                {% endif %}
               {% else %}
-                {% set base_columns = base_columns + [header_parts[i]] %}
+                {% if base_columns_str == '' %}
+                  {% set base_columns_str = header_parts[i] %}
+                {% else %}
+                  {% set base_columns_str = base_columns_str + '|||' + header_parts[i] %}
+                {% endif %}
               {% endif %}
             {% endfor %}
             
-            {# 构建新表头：基础列 + Dropped-Add + 时间戳列 #}
-            {% set new_header = base_columns + ['Dropped-Add'] + timestamp_columns %}
-            {{ new_header|join(',') }}
+            {# 构建新表头 #}
+            {% set new_header_parts = base_columns_str.split('|||') %}
+            {% set new_header_parts = new_header_parts + ['Dropped-Add'] %}
+            {% for col in timestamp_columns_str.split('|||') %}
+              {% set new_header_parts = new_header_parts + [col] %}
+            {% endfor %}
+            {{ new_header_parts|join(',') }}
             
-            {# 处理每一行数据 #}
-            {% for line in data_lines %}
+            {# 处理数据行 #}
+            {% for i in range(1, lines|length) %}
+              {% set line = lines[i] %}
               {% if line.strip() %}
                 {% set row_parts = line.split(',') %}
-                {% set base_values = [] %}
-                {% set timestamp_values = [] %}
                 
-                {# 分离基础值和时间戳值 #}
-                {% for i in range(header_parts|length) %}
-                  {% if i in timestamp_indices %}
-                    {% set val = 0 %}
-                    {% if i < row_parts|length %}
-                      {% set val = row_parts[i]|default('0')|int %}
-                    {% endif %}
-                    {% set timestamp_values = timestamp_values + [val] %}
+                {# 提取时间戳值 #}
+                {% set timestamp_values_str = '' %}
+                {% for idx_str in timestamp_indices_str.split('|||') %}
+                  {% set idx = idx_str|int %}
+                  {% set val = 0 %}
+                  {% if idx < row_parts|length %}
+                    {% set val = row_parts[idx]|default('0')|int %}
+                  {% endif %}
+                  {% if timestamp_values_str == '' %}
+                    {% set timestamp_values_str = val|string %}
                   {% else %}
-                    {% if i < row_parts|length %}
-                      {% set base_values = base_values + [row_parts[i]] %}
-                    {% else %}
-                      {% set base_values = base_values + [''] %}
-                    {% endif %}
+                    {% set timestamp_values_str = timestamp_values_str + '|||' + val|string %}
                   {% endif %}
                 {% endfor %}
                 
-                {# 计算Dropped-Add：最后两个时间戳的差值 #}
+                {# 计算增量 #}
                 {% set add_value = 0 %}
+                {% set timestamp_values = timestamp_values_str.split('|||') %}
                 {% if timestamp_values|length >= 2 %}
-                  {% set last_val = timestamp_values[-1] %}
-                  {% set prev_val = timestamp_values[-2] %}
+                  {% set last_val = timestamp_values[-1]|int %}
+                  {% set prev_val = timestamp_values[-2]|int %}
                   {% set add_value = last_val - prev_val %}
                   {% if add_value < 0 %}
                     {% set add_value = 0 %}
@@ -297,11 +329,31 @@
                 {% endif %}
                 
                 {# 构建新行 #}
-                {% set new_row = base_values + [add_value|string] %}
-                {% for val in timestamp_values %}
-                  {% set new_row = new_row + [val|string] %}
+                {% set base_values_str = '' %}
+                {% for j in range(header_parts|length) %}
+                  {% if not (j|string in timestamp_indices_str.split('|||')) %}
+                    {% if j < row_parts|length %}
+                      {% if base_values_str == '' %}
+                        {% set base_values_str = row_parts[j] %}
+                      {% else %}
+                        {% set base_values_str = base_values_str + '|||' + row_parts[j] %}
+                      {% endif %}
+                    {% else %}
+                      {% if base_values_str == '' %}
+                        {% set base_values_str = '' %}
+                      {% else %}
+                        {% set base_values_str = base_values_str + '|||' %}
+                      {% endif %}
+                    {% endif %}
+                  {% endif %}
                 {% endfor %}
-                {{ new_row|join(',') }}
+                
+                {% set new_row_parts = base_values_str.split('|||') %}
+                {% set new_row_parts = new_row_parts + [add_value|string] %}
+                {% for val in timestamp_values %}
+                  {% set new_row_parts = new_row_parts + [val] %}
+                {% endfor %}
+                {{ new_row_parts|join(',') }}
               {% endif %}
             {% endfor %}
           {% endif %}
@@ -329,7 +381,3 @@
         msg: |
           QoS collection completed for {{ inventory_hostname }}
           File saved to: {{ report_server }}:{{ historical_file }}
-          Features:
-          - Added new timestamp column: {{ timestamp_column }}
-          - Added Dropped-Add column with incremental calculation
-          - Updated existing file with new data
