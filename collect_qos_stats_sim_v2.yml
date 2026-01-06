@@ -125,7 +125,7 @@
     # 9. 直接创建CSV文件（简化版本）
     - name: Create CSV file directly
       copy:
-        content: |
+        content: >-
           Host,Interface,Queue,{{ timestamp_column }}
           {% for intf in interfaces %}
             {% for q in range(8) %}
