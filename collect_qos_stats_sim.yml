@@ -52,27 +52,7 @@
       loop_control:
         loop_var: item
       vars:
-        interface_stats: >-
-          {% set stats = {} %}
-          {% set lines = item.stdout_lines %}
-          {% for i in range(0, 8) %}
-            {% set queue_key = 'queue_' ~ i %}
-            {% set queue_line = [] %}
-            {% for line in lines %}
-              {% if line is match('.*Queue\\s+' ~ i ~ '.*') %}
-                {% set queue_line = line %}
-                {% break %}
-              {% endif %}
-            {% endfor %}
-            {% if queue_line %}
-              {% set parts = queue_line.split() %}
-              {% set dropped_value = parts[-1] | int %}
-              {% set _ = stats.update({queue_key: dropped_value}) %}
-            {% else %}
-              {% set _ = stats.update({queue_key: 0}) %}
-            {% endif %}
-          {% endfor %}
-          {{ stats }}
+        interface_stats: "{{ lookup('template', 'parse_qos_stats.j2') | from_json }}"
     
     # 5. 从远程服务器获取历史CSV文件
     - name: Download historical CSV file from remote server
@@ -95,120 +75,108 @@
       delegate_to: localhost
     
     # 7. 处理CSV数据
-    - name: Process CSV data
-      block:
-        # 情况1: CSV文件存在，读取并更新
-        - name: Load existing CSV data
-          ansible.builtin.set_fact:
-            existing_csv_data: "{{ lookup('file', csv_file_path) }}"
-          delegate_to: localhost
-          when: csv_exists
-          vars:
-            csv_file_path: "{{ output_dir }}/temp_{{ inventory_hostname }}_qos.csv"
-        
-        # 情况2: CSV文件不存在，创建新的CSV头部
-        - name: Create new CSV header when no file exists
-          ansible.builtin.set_fact:
-            existing_csv_data: ""
-          delegate_to: localhost
-          when: not csv_exists
-      
-      run_once: yes
-    
-    # 8. 生成或更新CSV内容
-    - name: Generate or update CSV content
+    - name: Generate CSV content
       ansible.builtin.set_fact:
-        updated_csv_content: "{{ new_csv_content }}"
+        updated_csv_content: "{{ csv_result }}"
       delegate_to: localhost
       vars:
-        new_csv_content: >-
-          {% if existing_csv_data and existing_csv_data.strip() %}
-            {# 情况A: 已有CSV文件，需要更新 #}
-            {% set lines = existing_csv_data.strip().split('\n') %}
-            {% set header = lines[0].split(',') %}
-            {% set data_rows = lines[1:] %}
-            
-            {# 检查是否已存在当前时间戳的列 #}
-            {% set timestamp_exists = false %}
-            {% set timestamp_col_index = -1 %}
-            {% for i in range(header|length) %}
-              {% if header[i] == timestamp_col %}
-                {% set timestamp_exists = true %}
-                {% set timestamp_col_index = i %}
-              {% endif %}
-            {% endfor %}
-            
-            {# 更新或添加时间戳列 #}
-            {% if timestamp_exists %}
-              {# 更新现有列 #}
-              {% set new_header = header %}
-              {% set new_data_rows = [] %}
+        csv_result: |
+          {% if csv_exists %}
+            {% set csv_data = lookup('file', output_dir + '/temp_' + inventory_hostname + '_qos.csv') %}
+            {% if csv_data and csv_data.strip() %}
+              {# 情况A: 已有CSV文件，需要更新 #}
+              {% set lines = csv_data.strip().split('\n') %}
+              {% set header = lines[0].split(',') %}
+              {% set data_rows = lines[1:] %}
               
-              {% for row in data_rows %}
-                {% if row.strip() %}
-                  {% set row_data = row.split(',') %}
-                  {% set host = row_data[0] %}
-                  {% set interface = row_data[1] %}
-                  {% set queue = row_data[2] %}
-                  
-                  {# 获取新的dropped值 #}
-                  {% set new_dropped = 0 %}
-                  {% if current_qos_data.get(interface) %}
-                    {% set new_dropped = current_qos_data[interface].get(queue, 0) %}
-                  {% endif %}
-                  
-                  {# 更新该列的值 #}
-                  {% if row_data|length > timestamp_col_index %}
-                    {% set row_data[timestamp_col_index] = new_dropped %}
-                  {% else %}
-                    {# 如果行数据少于列数，补齐 #}
-                    {% for i in range(row_data|length, timestamp_col_index + 1) %}
-                      {% if i == timestamp_col_index %}
-                        {% set _ = row_data.append(new_dropped) %}
-                      {% else %}
-                        {% set _ = row_data.append('') %}
-                      {% endif %}
-                    {% endfor %}
-                  {% endif %}
-                  
-                  {% set _ = new_data_rows.append(row_data|join(',')) %}
+              {# 检查是否已存在当前时间戳的列 #}
+              {% set timestamp_exists = false %}
+              {% set timestamp_col_index = -1 %}
+              {% for i in range(header|length) %}
+                {% if header[i] == timestamp_col %}
+                  {% set timestamp_exists = true %}
+                  {% set timestamp_col_index = i %}
                 {% endif %}
               {% endfor %}
-            {% else %}
-              {# 添加新的时间戳列 #}
-              {% set new_header = header + [timestamp_col] %}
-              {% set new_data_rows = [] %}
               
-              {% for row in data_rows %}
-                {% if row.strip() %}
-                  {% set row_data = row.split(',') %}
-                  {% set host = row_data[0] %}
-                  {% set interface = row_data[1] %}
-                  {% set queue = row_data[2] %}
-                  
-                  {# 获取新的dropped值 #}
-                  {% set new_dropped = 0 %}
-                  {% if current_qos_data.get(interface) %}
-                    {% set new_dropped = current_qos_data[interface].get(queue, 0) %}
+              {# 更新或添加时间戳列 #}
+              {% if timestamp_exists %}
+                {# 更新现有列 #}
+                {% set new_header = header %}
+                {% set new_data_rows = [] %}
+                
+                {% for row in data_rows %}
+                  {% if row.strip() %}
+                    {% set row_data = row.split(',') %}
+                    {% set host = row_data[0] %}
+                    {% set interface = row_data[1] %}
+                    {% set queue = row_data[2] %}
+                    
+                    {# 获取新的dropped值 #}
+                    {% set new_dropped = 0 %}
+                    {% if current_qos_data.get(interface) %}
+                      {% set new_dropped = current_qos_data[interface].get(queue, 0) %}
+                    {% endif %}
+                    
+                    {# 更新该列的值 #}
+                    {% if row_data|length > timestamp_col_index %}
+                      {% set row_data = row_data[:timestamp_col_index] + [new_dropped|string] + row_data[timestamp_col_index+1:] %}
+                    {% else %}
+                      {# 如果行数据少于列数，补齐 #}
+                      {% for i in range(row_data|length, timestamp_col_index + 1) %}
+                        {% if i == timestamp_col_index %}
+                          {% set row_data = row_data + [new_dropped|string] %}
+                        {% else %}
+                          {% set row_data = row_data + [''] %}
+                        {% endif %}
+                      {% endfor %}
+                    {% endif %}
+                    
+                    {{ row_data|join(',') }}
                   {% endif %}
-                  
-                  {% set _ = row_data.append(new_dropped) %}
-                  {% set _ = new_data_rows.append(row_data|join(',')) %}
-                {% endif %}
-              {% endfor %}
-            {% endif %}
-            
-            {# 生成更新后的CSV #}
-            {{ new_header|join(',') }}
-            {% for row in new_data_rows %}
+                {% endfor %}
+                
+                {{ new_header|join(',') }}
+                {% for row in new_data_rows %}
 {{ row }}
-            {% endfor %}
-          {% else %}
+                {% endfor %}
+              {% else %}
+                {# 添加新的时间戳列 #}
+                {% set new_header = header + [timestamp_col] %}
+                {% set new_data_rows = [] %}
+                
+                {% for row in data_rows %}
+                  {% if row.strip() %}
+                    {% set row_data = row.split(',') %}
+                    {% set host = row_data[0] %}
+                    {% set interface = row_data[1] %}
+                    {% set queue = row_data[2] %}
+                    
+                    {# 获取新的dropped值 #}
+                    {% set new_dropped = 0 %}
+                    {% if current_qos_data.get(interface) %}
+                      {% set new_dropped = current_qos_data[interface].get(queue, 0) %}
+                    {% endif %}
+                    
+                    {% set row_data = row_data + [new_dropped|string] %}
+                    {{ row_data|join(',') }}
+                  {% endif %}
+                {% endfor %}
+                
+                {{ new_header|join(',') }}
+                {% for row in new_data_rows %}
+{{ row }}
+                {% endfor %}
+              {% endif %}
+            {% else %}
+              {# CSV文件为空，当作新文件处理 #}
+              {% set csv_exists = false %}
+            {% endif %}
+          {% endif %}
+          
+          {% if not csv_exists %}
             {# 情况B: 没有CSV文件，创建新的 #}
-            {% set new_header = ['Host', 'Interface', 'Queue'] %}
-            
-            {# 添加所有时间戳列（目前只有当前时间戳） #}
-            {% set _ = new_header.append(timestamp_col) %}
+            {% set new_header = ['Host', 'Interface', 'Queue', timestamp_col] %}
             
             {# 生成数据行 #}
             {% set new_data_rows = [] %}
@@ -219,27 +187,23 @@
                 {% if current_qos_data.get(interface) %}
                   {% set dropped_value = current_qos_data[interface].get(queue_key, 0) %}
                 {% endif %}
-                {% set row_data = [inventory_hostname, interface, queue_key, dropped_value] %}
-                {% set _ = new_data_rows.append(row_data|join(',')) %}
+                {{ [inventory_hostname, interface, queue_key, dropped_value]|join(',') }}
               {% endfor %}
             {% endfor %}
             
-            {# 生成完整的CSV #}
             {{ new_header|join(',') }}
             {% for row in new_data_rows %}
 {{ row }}
             {% endfor %}
           {% endif %}
     
-      run_once: yes
-    
-    # 9. 计算Dropped-Add列并重新组织列顺序
+    # 8. 计算Dropped-Add列并重新组织列顺序
     - name: Calculate Dropped-Add and reorder columns
       ansible.builtin.set_fact:
         final_csv: "{{ final_csv_content }}"
       delegate_to: localhost
       vars:
-        final_csv_content: >-
+        final_csv_content: |
           {% set lines = updated_csv_content.strip().split('\n') %}
           {% set header = lines[0].split(',') %}
           {% set data_rows = lines[1:] %}
@@ -249,15 +213,15 @@
           {% set timestamp_indices = [] %}
           {% for i in range(header|length) %}
             {% if header[i] starts with 'Dropped-' %}
-              {% set _ = timestamp_cols.append(header[i]) %}
-              {% set _ = timestamp_indices.append(i) %}
+              {% set timestamp_cols = timestamp_cols + [header[i]] %}
+              {% set timestamp_indices = timestamp_indices + [i] %}
             {% endif %}
           {% endfor %}
           
           {# 构建新表头：基础列 + Dropped-Add + 时间戳列 #}
           {% set new_header = ['Host', 'Interface', 'Queue', 'Dropped-Add'] %}
           {% for col in timestamp_cols %}
-            {% set _ = new_header.append(col) %}
+            {% set new_header = new_header + [col] %}
           {% endfor %}
           
           {% set new_data_rows = [] %}
@@ -272,9 +236,9 @@
               {% set timestamp_values = [] %}
               {% for idx in timestamp_indices %}
                 {% if idx < row_data|length %}
-                  {% set _ = timestamp_values.append(row_data[idx] | default('0') | int) %}
+                  {% set timestamp_values = timestamp_values + [row_data[idx]|default('0')|int] %}
                 {% else %}
-                  {% set _ = timestamp_values.append(0) %}
+                  {% set timestamp_values = timestamp_values + [0] %}
                 {% endif %}
               {% endfor %}
               
@@ -292,22 +256,19 @@
               {# 构建新行 #}
               {% set new_row = [host, interface, queue, add_value] %}
               {% for val in timestamp_values %}
-                {% set _ = new_row.append(val) %}
+                {% set new_row = new_row + [val] %}
               {% endfor %}
               
-              {% set _ = new_data_rows.append(new_row|join(',')) %}
+              {{ new_row|join(',') }}
             {% endif %}
           {% endfor %}
           
-          {# 生成最终CSV #}
           {{ new_header|join(',') }}
           {% for row in new_data_rows %}
 {{ row }}
           {% endfor %}
     
-      run_once: yes
-    
-    # 10. 保存CSV文件到本地
+    # 9. 保存CSV文件到本地
     - name: Save CSV file locally
       ansible.builtin.copy:
         content: "{{ final_csv }}"
@@ -315,7 +276,7 @@
         mode: '0644'
       delegate_to: localhost
     
-    # 11. 上传CSV文件到远程服务器
+    # 10. 上传CSV文件到远程服务器
     - name: Upload updated CSV to remote server
       ansible.builtin.copy:
         src: "{{ output_dir }}/{{ inventory_hostname }}_qos.csv"
@@ -329,15 +290,11 @@
         ansible_user: root
         ansible_ssh_pass: "3edc$RFV"
     
-    # 12. 显示完成信息
+    # 11. 显示完成信息
     - name: Display completion message
       debug:
         msg: |
           QoS data collected and saved:
           - Local: {{ output_dir }}/{{ inventory_hostname }}_qos.csv
           - Remote: {{ report_server }}:{{ historical_file }}
-          {% if csv_exists %}
-          - Status: Updated existing CSV file
-          {% else %}
-          - Status: Created new CSV file
-          {% endif %}
+          - Status: {{ 'Updated existing CSV file' if csv_exists else 'Created new CSV file' }}
