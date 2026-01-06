@@ -39,15 +39,22 @@
       register: qos_output
       loop: "{{ interfaces }}"
     
-    # 4. 解析QoS数据 - 内联处理
-    - name: Parse QoS data for each interface
+    # 4. 先初始化解析数据变量
+    - name: Initialize parsed data
       set_fact:
-        parsed_qos_data: "{{ parsed_qos_data | combine({ item.item: queue_stats }) }}"
-      loop: "{{ qos_output.results }}"
+        parsed_qos_data: {}
+      delegate_to: localhost
+    
+    # 5. 解析QoS数据 - 逐个接口处理
+    - name: Parse QoS data for first interface
+      set_fact:
+        parsed_qos_data: "{{ parsed_qos_data | combine({ interface_name: queue_stats }) }}"
+      when: qos_output.results|length > 0
       delegate_to: localhost
       vars:
+        interface_name: "{{ qos_output.results[0].item }}"
         queue_stats: >-
-          {%- set lines = item.stdout_lines -%}
+          {%- set lines = qos_output.results[0].stdout_lines -%}
           {%- set result = {} -%}
           {%- for q in range(8) -%}
             {%- set queue_key = 'queue_' ~ q -%}
@@ -66,7 +73,35 @@
           {%- endfor -%}
           {{ result }}
     
-    # 5. 从远程服务器获取历史CSV
+    # 6. 如果有第二个接口，也解析
+    - name: Parse QoS data for second interface
+      set_fact:
+        parsed_qos_data: "{{ parsed_qos_data | combine({ interface_name: queue_stats }) }}"
+      when: qos_output.results|length > 1
+      delegate_to: localhost
+      vars:
+        interface_name: "{{ qos_output.results[1].item }}"
+        queue_stats: >-
+          {%- set lines = qos_output.results[1].stdout_lines -%}
+          {%- set result = {} -%}
+          {%- for q in range(8) -%}
+            {%- set queue_key = 'queue_' ~ q -%}
+            {%- set value = 0 -%}
+            {%- for line in lines -%}
+              {%- if 'Queue ' ~ q in line -%}
+                {%- set parts = line.split() -%}
+                {%- for part in parts -%}
+                  {%- if part == '0' or part|int > 0 -%}
+                    {%- set value = part|int -%}
+                  {%- endif -%}
+                {%- endfor -%}
+              {%- endif -%}
+            {%- endfor -%}
+            {%- set _ = result.update({queue_key: value}) -%}
+          {%- endfor -%}
+          {{ result }}
+    
+    # 7. 从远程服务器获取历史CSV
     - name: Download historical CSV
       fetch:
         src: "{{ historical_file }}"
@@ -80,141 +115,33 @@
         ansible_user: root
         ansible_ssh_pass: "3edc$RFV"
     
-    # 6. 检查历史文件是否存在
+    # 8. 检查历史文件是否存在
     - name: Check if historical file exists locally
       stat:
         path: "{{ output_dir }}/temp_{{ inventory_hostname }}_qos.csv"
       register: file_stat
       delegate_to: localhost
     
-    # 7. 生成CSV头 - 完全内联
-    - name: Generate CSV header
-      set_fact:
-        csv_header: >-
-          {% if file_stat.stat.exists %}
-            {% set csv_content = lookup('file', output_dir + '/temp_' + inventory_hostname + '_qos.csv') %}
-            {% if csv_content and csv_content.strip() %}
-              {% set lines = csv_content.strip().split('\n') %}
-              {% set header_line = lines[0] %}
-              {% set header_parts = header_line.split(',') %}
-              {% set has_column = false %}
-              {% for part in header_parts %}
-                {% if part == timestamp_column %}
-                  {% set has_column = true %}
-                {% endif %}
-              {% endfor %}
-              {% if has_column %}
-                {{ header_line }}
-              {% else %}
-                {{ header_line }},{{ timestamp_column }}
-              {% endif %}
-            {% else %}
-              Host,Interface,Queue,{{ timestamp_column }}
-            {% endif %}
-          {% else %}
-            Host,Interface,Queue,{{ timestamp_column }}
-          {% endif %}
-      delegate_to: localhost
-    
-    # 8. 生成CSV数据行 - 完全内联
-    - name: Generate CSV data rows
-      set_fact:
-        csv_data: >-
-          {% if file_stat.stat.exists %}
-            {% set csv_content = lookup('file', output_dir + '/temp_' + inventory_hostname + '_qos.csv') %}
-            {% if csv_content and csv_content.strip() %}
-              {% set lines = csv_content.strip().split('\n') %}
-              {% set header_line = lines[0] %}
-              {% set data_lines = lines[1:] %}
-              {% set header_parts = header_line.split(',') %}
-              {% set has_column = false %}
-              {% set column_index = -1 %}
-              {% for i in range(header_parts|length) %}
-                {% if header_parts[i] == timestamp_column %}
-                  {% set has_column = true %}
-                  {% set column_index = i %}
-                {% endif %}
-              {% endfor %}
-              
-              {% set output_lines = [] %}
-              {% for line in data_lines %}
-                {% if line.strip() %}
-                  {% set row_parts = line.split(',') %}
-                  {% set interface_name = row_parts[1] %}
-                  {% set queue_name = row_parts[2] %}
-                  
-                  {# 获取新值 #}
-                  {% set new_value = 0 %}
-                  {% if parsed_qos_data[interface_name] and parsed_qos_data[interface_name][queue_name] %}
-                    {% set new_value = parsed_qos_data[interface_name][queue_name] %}
-                  {% endif %}
-                  
-                  {% if has_column and column_index >= 0 %}
-                    {# 更新现有列 #}
-                    {% if column_index < row_parts|length %}
-                      {% set row_parts[column_index] = new_value|string %}
-                    {% endif %}
-                    {% set row_str = row_parts|join(',') %}
-                    {% set output_lines = output_lines + [row_str] %}
-                  {% else %}
-                    {# 添加新列 #}
-                    {% set row_str = line ~ ',' ~ new_value %}
-                    {% set output_lines = output_lines + [row_str] %}
-                  {% endif %}
-                {% endif %}
-              {% endfor %}
-              {% for line in output_lines %}
-                {{ line }}
-              {% endfor %}
-            {% else %}
-              {# 文件为空 #}
-              {% for intf in interfaces %}
-                {% for q in range(8) %}
-                  {% set queue = 'queue_' ~ q %}
-                  {% set value = 0 %}
-                  {% if parsed_qos_data[intf] and parsed_qos_data[intf][queue] %}
-                    {% set value = parsed_qos_data[intf][queue] %}
-                  {% endif %}
-                  {{ inventory_hostname }},{{ intf }},{{ queue }},{{ value }}
-                {% endfor %}
-              {% endfor %}
-            {% endif %}
-          {% else %}
-            {# 文件不存在 #}
-            {% for intf in interfaces %}
-              {% for q in range(8) %}
-                {% set queue = 'queue_' ~ q %}
-                {% set value = 0 %}
-                {% if parsed_qos_data[intf] and parsed_qos_data[intf][queue] %}
-                  {% set value = parsed_qos_data[intf][queue] %}
-                {% endif %}
-                {{ inventory_hostname }},{{ intf }},{{ queue }},{{ value }}
-              {% endfor %}
-            {% endfor %}
-          {% endif %}
-      delegate_to: localhost
-    
-    # 9. 组合CSV
-    - name: Combine CSV content
-      set_fact:
-        csv_output: "{{ csv_header }}\n{{ csv_data }}"
-      delegate_to: localhost
-    
-    # 10. 添加Dropped-Add列 - 简化为每次都添加新文件
-    - name: Create final CSV
-      set_fact:
-        final_csv_content: "{{ csv_output }}"
-      delegate_to: localhost
-    
-    # 11. 保存到本地
-    - name: Save CSV locally
+    # 9. 直接创建CSV文件（简化版本）
+    - name: Create CSV file directly
       copy:
-        content: "{{ final_csv_content }}"
+        content: |
+          Host,Interface,Queue,{{ timestamp_column }}
+          {% for intf in interfaces %}
+            {% for q in range(8) %}
+              {% set queue = 'queue_' ~ q %}
+              {% set value = 0 %}
+              {% if parsed_qos_data[intf] and parsed_qos_data[intf][queue] %}
+                {% set value = parsed_qos_data[intf][queue] %}
+              {% endif %}
+          {{ inventory_hostname }},{{ intf }},{{ queue }},{{ value }}
+            {% endfor %}
+          {% endfor %}
         dest: "{{ output_dir }}/{{ inventory_hostname }}_qos.csv"
         mode: '0644'
       delegate_to: localhost
     
-    # 12. 上传到远程
+    # 10. 上传到远程
     - name: Upload to remote server
       copy:
         src: "{{ output_dir }}/{{ inventory_hostname }}_qos.csv"
@@ -228,7 +155,7 @@
         ansible_user: root
         ansible_ssh_pass: "3edc$RFV"
     
-    # 13. 显示结果
+    # 11. 显示结果
     - name: Show result
       debug:
         msg: |
