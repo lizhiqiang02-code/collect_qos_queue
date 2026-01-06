@@ -1,7 +1,7 @@
 ---
 - name: Simple QoS CSV Update with Auto-Create
-  hosts: all
-  gather_facts: no
+  #hosts: all
+  #gather_facts: no
   vars:
     report_server: "172.20.149.118"
     report_path: "/root/qos_reports"
