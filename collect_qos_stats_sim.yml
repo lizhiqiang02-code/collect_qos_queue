@@ -44,15 +44,34 @@
       loop_control:
         loop_var: interface_item
     
-    # 4. 解析QoS数据
-    - name: Parse QoS output and extract dropped values
+    # 替换第4个任务为这个更简单的方法
+    - name: Parse QoS statistics with simple method
       ansible.builtin.set_fact:
-        current_qos_data: "{{ current_qos_data | default({}) | combine({ item.interface_item: interface_stats }) }}"
+        current_qos_data: "{{ current_qos_data | default({}) | combine({ item.interface_item: item_stats }) }}"
       loop: "{{ qos_results.results }}"
       loop_control:
         loop_var: item
       vars:
-        interface_stats: "{{ lookup('template', 'parse_qos_stats.j2') | from_json }}"
+        item_stats: >-
+          {%- set result = {} -%}
+          {%- for i in range(0, 8) -%}
+            {%- set queue_key = 'queue_' ~ i -%}
+            {%- set queue_line = '' -%}
+            {%- for line in item.stdout_lines -%}
+              {%- if line is match('.*Queue\s+' ~ i ~ '.*') -%}
+                {%- set queue_line = line -%}
+                {%- break -%}
+              {%- endif -%}
+            {%- endfor -%}
+            {%- if queue_line -%}
+              {%- set parts = queue_line.split() -%}
+              {%- set dropped_value = parts[-1] | int -%}
+              {%- set _ = result.update({queue_key: dropped_value}) -%}
+            {%- else -%}
+              {%- set _ = result.update({queue_key: 0}) -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ result }}
     
     # 5. 从远程服务器获取历史CSV文件
     - name: Download historical CSV file from remote server
