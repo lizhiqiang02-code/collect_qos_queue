@@ -39,22 +39,15 @@
       register: qos_output
       loop: "{{ interfaces }}"
     
-    # 4. 初始化解析数据变量
-    - name: Initialize parsed data
-      set_fact:
-        parsed_qos_data: {}
-      delegate_to: localhost
-    
-    # 5. 解析QoS数据 - 不使用宏，直接内联处理
+    # 4. 解析QoS数据 - 内联处理
     - name: Parse QoS data for each interface
       set_fact:
-        parsed_qos_data: "{{ parsed_qos_data | combine({ qos_result.item: queue_stats }) }}"
+        parsed_qos_data: "{{ parsed_qos_data | combine({ item.item: queue_stats }) }}"
       loop: "{{ qos_output.results }}"
       delegate_to: localhost
       vars:
-        qos_result: "{{ item }}"
         queue_stats: >-
-          {%- set lines = qos_result.stdout_lines -%}
+          {%- set lines = item.stdout_lines -%}
           {%- set result = {} -%}
           {%- for q in range(8) -%}
             {%- set queue_key = 'queue_' ~ q -%}
@@ -73,7 +66,7 @@
           {%- endfor -%}
           {{ result }}
     
-    # 6. 从远程服务器获取历史CSV
+    # 5. 从远程服务器获取历史CSV
     - name: Download historical CSV
       fetch:
         src: "{{ historical_file }}"
@@ -87,25 +80,17 @@
         ansible_user: root
         ansible_ssh_pass: "3edc$RFV"
     
-    # 7. 检查历史文件是否存在
+    # 6. 检查历史文件是否存在
     - name: Check if historical file exists locally
       stat:
         path: "{{ output_dir }}/temp_{{ inventory_hostname }}_qos.csv"
       register: file_stat
       delegate_to: localhost
     
-    # 8. 生成CSV内容 - 简单版本
-    - name: Generate CSV content
+    # 7. 生成CSV头 - 完全内联
+    - name: Generate CSV header
       set_fact:
-        csv_lines: []
-      delegate_to: localhost
-    
-    - name: Build CSV header
-      set_fact:
-        csv_header: "{{ build_header() }}"
-      delegate_to: localhost
-      vars:
-        build_header: |
+        csv_header: >-
           {% if file_stat.stat.exists %}
             {% set csv_content = lookup('file', output_dir + '/temp_' + inventory_hostname + '_qos.csv') %}
             {% if csv_content and csv_content.strip() %}
@@ -129,13 +114,12 @@
           {% else %}
             Host,Interface,Queue,{{ timestamp_column }}
           {% endif %}
-    
-    - name: Build CSV data rows
-      set_fact:
-        csv_data: "{{ build_data_rows() }}"
       delegate_to: localhost
-      vars:
-        build_data_rows: |
+    
+    # 8. 生成CSV数据行 - 完全内联
+    - name: Generate CSV data rows
+      set_fact:
+        csv_data: >-
           {% if file_stat.stat.exists %}
             {% set csv_content = lookup('file', output_dir + '/temp_' + inventory_hostname + '_qos.csv') %}
             {% if csv_content and csv_content.strip() %}
@@ -152,7 +136,7 @@
                 {% endif %}
               {% endfor %}
               
-              {% set output = [] %}
+              {% set output_lines = [] %}
               {% for line in data_lines %}
                 {% if line.strip() %}
                   {% set row_parts = line.split(',') %}
@@ -170,17 +154,20 @@
                     {% if column_index < row_parts|length %}
                       {% set row_parts[column_index] = new_value|string %}
                     {% endif %}
-                    {% set output = output + [row_parts|join(',')] %}
+                    {% set row_str = row_parts|join(',') %}
+                    {% set output_lines = output_lines + [row_str] %}
                   {% else %}
                     {# 添加新列 #}
-                    {% set output = output + [line ~ ',' ~ new_value] %}
+                    {% set row_str = line ~ ',' ~ new_value %}
+                    {% set output_lines = output_lines + [row_str] %}
                   {% endif %}
                 {% endif %}
               {% endfor %}
-              {{ output|join('\n') }}
+              {% for line in output_lines %}
+                {{ line }}
+              {% endfor %}
             {% else %}
               {# 文件为空 #}
-              {% set output = [] %}
               {% for intf in interfaces %}
                 {% for q in range(8) %}
                   {% set queue = 'queue_' ~ q %}
@@ -188,14 +175,12 @@
                   {% if parsed_qos_data[intf] and parsed_qos_data[intf][queue] %}
                     {% set value = parsed_qos_data[intf][queue] %}
                   {% endif %}
-                  {% set output = output + [inventory_hostname ~ ',' ~ intf ~ ',' ~ queue ~ ',' ~ value] %}
+                  {{ inventory_hostname }},{{ intf }},{{ queue }},{{ value }}
                 {% endfor %}
               {% endfor %}
-              {{ output|join('\n') }}
             {% endif %}
           {% else %}
             {# 文件不存在 #}
-            {% set output = [] %}
             {% for intf in interfaces %}
               {% for q in range(8) %}
                 {% set queue = 'queue_' ~ q %}
@@ -203,27 +188,33 @@
                 {% if parsed_qos_data[intf] and parsed_qos_data[intf][queue] %}
                   {% set value = parsed_qos_data[intf][queue] %}
                 {% endif %}
-                {% set output = output + [inventory_hostname ~ ',' ~ intf ~ ',' ~ queue ~ ',' ~ value] %}
+                {{ inventory_hostname }},{{ intf }},{{ queue }},{{ value }}
               {% endfor %}
             {% endfor %}
-            {{ output|join('\n') }}
           {% endif %}
+      delegate_to: localhost
     
     # 9. 组合CSV
-    - name: Combine CSV
+    - name: Combine CSV content
       set_fact:
         csv_output: "{{ csv_header }}\n{{ csv_data }}"
       delegate_to: localhost
     
-    # 10. 保存到本地
+    # 10. 添加Dropped-Add列 - 简化为每次都添加新文件
+    - name: Create final CSV
+      set_fact:
+        final_csv_content: "{{ csv_output }}"
+      delegate_to: localhost
+    
+    # 11. 保存到本地
     - name: Save CSV locally
       copy:
-        content: "{{ csv_output }}"
+        content: "{{ final_csv_content }}"
         dest: "{{ output_dir }}/{{ inventory_hostname }}_qos.csv"
         mode: '0644'
       delegate_to: localhost
     
-    # 11. 上传到远程
+    # 12. 上传到远程
     - name: Upload to remote server
       copy:
         src: "{{ output_dir }}/{{ inventory_hostname }}_qos.csv"
@@ -237,7 +228,7 @@
         ansible_user: root
         ansible_ssh_pass: "3edc$RFV"
     
-    # 12. 显示结果
+    # 13. 显示结果
     - name: Show result
       debug:
         msg: |
