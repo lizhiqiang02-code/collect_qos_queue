@@ -269,7 +269,7 @@
             
             {{ new_header|join(',') }}
             {% for row in new_rows %}
-{{ row }}
+            {{ row }}
             {% endfor %}
           {% endmacro %}
           {{ add_column(csv_output) }}
