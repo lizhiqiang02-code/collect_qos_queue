@@ -1,0 +1,15 @@
+---
+- name: Main QoS Workflow
+  hosts: all
+  gather_facts: no
+  
+  tasks:
+    # 第一阶段：更新所有设备的CSV
+    - name: Update QoS CSV for all devices
+      include_tasks: collect_qos_stats_sim.yml
+    
+    # 第二阶段：监控并发送告警
+    - name: Monitor and send alerts
+      include_tasks: alerts.yml
+      run_once: true
+      delegate_to: localhost
