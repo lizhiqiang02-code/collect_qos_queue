@@ -1,0 +1,33 @@
+---
+- name: Get QoS statistics for interface {{ interface }}
+  ansible.netcommon.cli_command:
+    command: "display qos queue statistics interface {{ interface }}"
+  register: qos_result
+
+- name: Parse output and build CSV rows
+  ansible.builtin.set_fact:
+    csv_data: "{{ csv_data + queue_rows }}"
+  delegate_to: localhost
+  vars:
+    queue_rows: |
+      {%- set rows = [] -%}
+      {%- set host_key = inventory_hostname ~ '_' ~ interface -%}
+      {%- set hist_interface_data = historical_data.get(host_key, {}) -%}
+      {%- for queue in range(0, 8) -%}
+        {%- set queue_key = 'queue_' ~ queue -%}
+        {%- set current_val = 0 -%}
+        {%- set hist_val = hist_interface_data.get(queue_key, 0) -%}
+        {%- set dropped_add = current_val - hist_val -%}
+        {%- if dropped_add < 0 -%}
+          {%- set dropped_add = 0 -%}
+        {%- endif -%}
+        {%- set _ = rows.append('"%s","%s","%s","%s","%s","%s"'|format(
+            inventory_hostname,
+            interface,
+            queue_key,
+            current_val,
+            dropped_add,
+            timestamp
+          )) -%}
+      {%- endfor -%}
+      {{ rows }}
