@@ -45,36 +45,33 @@
         parsed_qos_data: {}
       delegate_to: localhost
     
-    # 5. 解析QoS数据（简化的解析逻辑）
-    - name: Parse QoS data line by line
+    # 5. 解析QoS数据 - 不使用宏，直接内联处理
+    - name: Parse QoS data for each interface
       set_fact:
-        parsed_qos_data: "{{ parsed_qos_data | combine({ interface_name: parse_qos_lines(qos_result.stdout_lines) }) }}"
+        parsed_qos_data: "{{ parsed_qos_data | combine({ qos_result.item: queue_stats }) }}"
       loop: "{{ qos_output.results }}"
       delegate_to: localhost
       vars:
-        interface_name: "{{ qos_result.item }}"
         qos_result: "{{ item }}"
-        parse_qos_lines: |
-          {% macro parse(lines) %}
-            {% set result = {} %}
-            {% for q in range(8) %}
-              {% set queue_key = 'queue_' ~ q %}
-              {% set value = 0 %}
-              {% for line in lines %}
-                {% if line is search('Queue ' ~ q) %}
-                  {% set parts = line.split() %}
-                  {% for part in parts %}
-                    {% if part is match('^[0-9]+$') %}
-                      {% set value = part|int %}
-                    {% endif %}
-                  {% endfor %}
-                {% endif %}
-              {% endfor %}
-              {% set _ = result.update({queue_key: value}) %}
-            {% endfor %}
-            {{ result }}
-          {% endmacro %}
-          {{ parse(qos_result.stdout_lines) }}
+        queue_stats: >-
+          {%- set lines = qos_result.stdout_lines -%}
+          {%- set result = {} -%}
+          {%- for q in range(8) -%}
+            {%- set queue_key = 'queue_' ~ q -%}
+            {%- set value = 0 -%}
+            {%- for line in lines -%}
+              {%- if 'Queue ' ~ q in line -%}
+                {%- set parts = line.split() -%}
+                {%- for part in parts -%}
+                  {%- if part == '0' or part|int > 0 -%}
+                    {%- set value = part|int -%}
+                  {%- endif -%}
+                {%- endfor -%}
+              {%- endif -%}
+            {%- endfor -%}
+            {%- set _ = result.update({queue_key: value}) -%}
+          {%- endfor -%}
+          {{ result }}
     
     # 6. 从远程服务器获取历史CSV
     - name: Download historical CSV
@@ -97,87 +94,93 @@
       register: file_stat
       delegate_to: localhost
     
-    # 8. 生成CSV内容 - 完全使用字符串拼接
-    - name: Generate CSV content using string concatenation
+    # 8. 生成CSV内容 - 简单版本
+    - name: Generate CSV content
       set_fact:
-        csv_output: "{{ generate_csv_string() }}"
+        csv_lines: []
+      delegate_to: localhost
+    
+    - name: Build CSV header
+      set_fact:
+        csv_header: "{{ build_header() }}"
       delegate_to: localhost
       vars:
-        generate_csv_string: |
-          {% macro generate() %}
-            {% if file_stat.stat.exists %}
-              {% set csv_content = lookup('file', output_dir + '/temp_' + inventory_hostname + '_qos.csv') %}
-              {% if csv_content and csv_content.strip() %}
-                {% set lines = csv_content.strip().split('\n') %}
-                {% set header_line = lines[0] %}
-                {% set data_lines = lines[1:] %}
-                
-                {# 检查是否已有当前时间戳列 #}
-                {% set header_parts = header_line.split(',') %}
-                {% set col_exists = false %}
-                {% for header_part in header_parts %}
-                  {% if header_part == timestamp_column %}
-                    {% set col_exists = true %}
-                  {% endif %}
-                {% endfor %}
-                
-                {# 输出表头 #}
-                {% if col_exists %}
-                  {{ header_line }}
-                {% else %}
-                  {{ header_line }},{{ timestamp_column }}
+        build_header: |
+          {% if file_stat.stat.exists %}
+            {% set csv_content = lookup('file', output_dir + '/temp_' + inventory_hostname + '_qos.csv') %}
+            {% if csv_content and csv_content.strip() %}
+              {% set lines = csv_content.strip().split('\n') %}
+              {% set header_line = lines[0] %}
+              {% set header_parts = header_line.split(',') %}
+              {% set has_column = false %}
+              {% for part in header_parts %}
+                {% if part == timestamp_column %}
+                  {% set has_column = true %}
                 {% endif %}
-                
-                {# 处理数据行 #}
-                {% for line in data_lines %}
-                  {% if line.strip() %}
-                    {% set row_parts = line.split(',') %}
-                    {% set interface_name = row_parts[1] %}
-                    {% set queue_name = row_parts[2] %}
-                    
-                    {# 获取新值 #}
-                    {% set new_value = 0 %}
-                    {% if parsed_qos_data[interface_name] and parsed_qos_data[interface_name][queue_name] %}
-                      {% set new_value = parsed_qos_data[interface_name][queue_name] %}
-                    {% endif %}
-                    
-                    {# 添加或更新列 #}
-                    {% if col_exists %}
-                      {# 需要更新现有列的值 #}
-                      {% set column_index = -1 %}
-                      {% for i in range(header_parts|length) %}
-                        {% if header_parts[i] == timestamp_column %}
-                          {% set column_index = i %}
-                        {% endif %}
-                      {% endfor %}
-                      
-                      {% if column_index >= 0 and column_index < row_parts|length %}
-                        {% set row_parts[column_index] = new_value|string %}
-                      {% endif %}
-                      {{ row_parts|join(',') }}
-                    {% else %}
-                      {# 添加新列 #}
-                      {{ line }},{{ new_value }}
-                    {% endif %}
-                  {% endif %}
-                {% endfor %}
+              {% endfor %}
+              {% if has_column %}
+                {{ header_line }}
               {% else %}
-                {# 文件为空，创建新CSV #}
-                Host,Interface,Queue,{{ timestamp_column }}
-                {% for intf in interfaces %}
-                  {% for q in range(8) %}
-                    {% set queue = 'queue_' ~ q %}
-                    {% set value = 0 %}
-                    {% if parsed_qos_data[intf] and parsed_qos_data[intf][queue] %}
-                      {% set value = parsed_qos_data[intf][queue] %}
-                    {% endif %}
-                    {{ inventory_hostname }},{{ intf }},{{ queue }},{{ value }}
-                  {% endfor %}
-                {% endfor %}
+                {{ header_line }},{{ timestamp_column }}
               {% endif %}
             {% else %}
-              {# 文件不存在，创建新CSV #}
               Host,Interface,Queue,{{ timestamp_column }}
+            {% endif %}
+          {% else %}
+            Host,Interface,Queue,{{ timestamp_column }}
+          {% endif %}
+    
+    - name: Build CSV data rows
+      set_fact:
+        csv_data: "{{ build_data_rows() }}"
+      delegate_to: localhost
+      vars:
+        build_data_rows: |
+          {% if file_stat.stat.exists %}
+            {% set csv_content = lookup('file', output_dir + '/temp_' + inventory_hostname + '_qos.csv') %}
+            {% if csv_content and csv_content.strip() %}
+              {% set lines = csv_content.strip().split('\n') %}
+              {% set header_line = lines[0] %}
+              {% set data_lines = lines[1:] %}
+              {% set header_parts = header_line.split(',') %}
+              {% set has_column = false %}
+              {% set column_index = -1 %}
+              {% for i in range(header_parts|length) %}
+                {% if header_parts[i] == timestamp_column %}
+                  {% set has_column = true %}
+                  {% set column_index = i %}
+                {% endif %}
+              {% endfor %}
+              
+              {% set output = [] %}
+              {% for line in data_lines %}
+                {% if line.strip() %}
+                  {% set row_parts = line.split(',') %}
+                  {% set interface_name = row_parts[1] %}
+                  {% set queue_name = row_parts[2] %}
+                  
+                  {# 获取新值 #}
+                  {% set new_value = 0 %}
+                  {% if parsed_qos_data[interface_name] and parsed_qos_data[interface_name][queue_name] %}
+                    {% set new_value = parsed_qos_data[interface_name][queue_name] %}
+                  {% endif %}
+                  
+                  {% if has_column and column_index >= 0 %}
+                    {# 更新现有列 #}
+                    {% if column_index < row_parts|length %}
+                      {% set row_parts[column_index] = new_value|string %}
+                    {% endif %}
+                    {% set output = output + [row_parts|join(',')] %}
+                  {% else %}
+                    {# 添加新列 #}
+                    {% set output = output + [line ~ ',' ~ new_value] %}
+                  {% endif %}
+                {% endif %}
+              {% endfor %}
+              {{ output|join('\n') }}
+            {% else %}
+              {# 文件为空 #}
+              {% set output = [] %}
               {% for intf in interfaces %}
                 {% for q in range(8) %}
                   {% set queue = 'queue_' ~ q %}
@@ -185,23 +188,37 @@
                   {% if parsed_qos_data[intf] and parsed_qos_data[intf][queue] %}
                     {% set value = parsed_qos_data[intf][queue] %}
                   {% endif %}
-                  {{ inventory_hostname }},{{ intf }},{{ queue }},{{ value }}
+                  {% set output = output + [inventory_hostname ~ ',' ~ intf ~ ',' ~ queue ~ ',' ~ value] %}
                 {% endfor %}
               {% endfor %}
+              {{ output|join('\n') }}
             {% endif %}
-          {% endmacro %}
-          {{ generate() }}
+          {% else %}
+            {# 文件不存在 #}
+            {% set output = [] %}
+            {% for intf in interfaces %}
+              {% for q in range(8) %}
+                {% set queue = 'queue_' ~ q %}
+                {% set value = 0 %}
+                {% if parsed_qos_data[intf] and parsed_qos_data[intf][queue] %}
+                  {% set value = parsed_qos_data[intf][queue] %}
+                {% endif %}
+                {% set output = output + [inventory_hostname ~ ',' ~ intf ~ ',' ~ queue ~ ',' ~ value] %}
+              {% endfor %}
+            {% endfor %}
+            {{ output|join('\n') }}
+          {% endif %}
     
-    # 9. 处理最终CSV - 简化版本，只添加列不计算增量
-    - name: Create final CSV (simplified)
+    # 9. 组合CSV
+    - name: Combine CSV
       set_fact:
-        final_csv_content: "{{ csv_output }}"
+        csv_output: "{{ csv_header }}\n{{ csv_data }}"
       delegate_to: localhost
     
     # 10. 保存到本地
     - name: Save CSV locally
       copy:
-        content: "{{ final_csv_content }}"
+        content: "{{ csv_output }}"
         dest: "{{ output_dir }}/{{ inventory_hostname }}_qos.csv"
         mode: '0644'
       delegate_to: localhost
