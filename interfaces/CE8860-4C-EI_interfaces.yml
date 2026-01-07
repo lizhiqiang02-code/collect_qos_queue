@@ -49,7 +49,7 @@ interfaces:
   - name: "25GE1/1/12"
     description: "业务端口"
 
-   - name: "25GE1/1/13"
+  - name: "25GE1/1/13"
     description: "业务端口" 
 
   - name: "25GE1/1/14"
@@ -121,7 +121,7 @@ interfaces:
   - name: "25GE1/3/12"
     description: "业务端口"
 
-   - name: "25GE1/3/13"
+  - name: "25GE1/3/13"
     description: "业务端口" 
 
   - name: "25GE1/3/14"
