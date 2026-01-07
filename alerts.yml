@@ -1,5 +1,5 @@
 ---
-- name: Monitor QoS Alerts (Flexible)
+- name: Monitor QoS Alerts (No Description Column)
   hosts: localhost
   gather_facts: no
   
@@ -7,13 +7,13 @@
     report_server: "172.20.149.118"
     report_path: "/root/qos_reports"
     webhook_url: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=c37ae8a6-be4d-4dba-afd3-5e457369203a"
-  
+    
   tasks:
     - name: Get current time
       shell: date +"%Y-%m-%d %H:%M:%S"
       register: current_time
     
-    - name: Create flexible monitoring script
+    - name: Create monitoring script for new format
       copy:
         content: |
           #!/usr/bin/env python3
@@ -23,121 +23,125 @@
           import json
           import time
           
-          def download_and_analyze(server, user, password, remote_path):
+          def analyze_csv_files(server, user, password, base_path):
+              """分析CSV文件，返回告警列表"""
               alerts = []
               
-              # Get file list
-              list_cmd = f"sshpass -p '{password}' ssh -o StrictHostKeyChecking=no {user}@{server} 'ls {remote_path}/*_qos.csv 2>/dev/null'"
+              # 获取所有queue.csv文件
+              list_cmd = f"sshpass -p '{password}' ssh -o StrictHostKeyChecking=no {user}@{server} 'find {base_path} -name \"*_queue.csv\" -type f'"
               
               try:
                   result = subprocess.run(list_cmd, shell=True, capture_output=True, text=True)
-                  remote_files = [f.strip() for f in result.stdout.strip().split('\n') if f.strip()]
+                  csv_files = [f.strip() for f in result.stdout.strip().split('\n') if f.strip()]
               except Exception as e:
-                  print(f"Error getting file list: {e}")
+                  print(f"获取文件列表错误: {e}")
                   return alerts
               
-              print(f"Found {len(remote_files)} CSV files")
+              print(f"找到 {len(csv_files)} 个queue.csv文件")
               
-              for remote_file in remote_files:
+              for remote_file in csv_files:
                   filename = os.path.basename(remote_file)
                   local_file = f"/tmp/{filename}"
                   
-                  # Download file
+                  # 下载文件
                   download_cmd = f"sshpass -p '{password}' scp -o StrictHostKeyChecking=no {user}@{server}:\"{remote_file}\" \"{local_file}\""
                   
                   try:
-                      subprocess.run(download_cmd, shell=True, check=True)
-                      print(f"Downloaded: {filename}")
+                      subprocess.run(download_cmd, shell=True, check=True, timeout=5)
+                      print(f"✓ 下载: {filename}")
                   except Exception as e:
-                      print(f"Error downloading {filename}: {e}")
+                      print(f"✗ 下载失败 {filename}: {e}")
                       continue
                   
-                  # Analyze file
+                  # 分析文件
                   try:
                       with open(local_file, 'r') as f:
                           lines = f.readlines()
                       
                       if len(lines) < 2:
-                          print(f"File {filename} has insufficient lines")
-                          os.remove(local_file)
+                          print(f"  文件 {filename} 行数不足")
                           continue
                       
-                      # Parse header
+                      # 解析表头
                       headers = [h.strip() for h in lines[0].split(',')]
+                      print(f"  分析 {filename}: 表头={headers}")
                       
-                      # Find column indices
-                      host_idx = -1
-                      interface_idx = -1
-                      queue_idx = -1
-                      dropped_add_idx = -1
+                      # 查找关键列的索引（新格式：无Description列）
+                      column_indices = {}
                       
-                      for i, header in enumerate(headers):
-                          header_lower = header.lower()
-                          if 'host' in header_lower:
-                              host_idx = i
-                          elif 'interface' in header_lower:
-                              interface_idx = i
-                          elif 'queue' in header_lower:
-                              queue_idx = i
-                          elif 'dropped-add' in header_lower:
-                              dropped_add_idx = i
+                      # 必需的关键列
+                      required_columns = ['host_name', 'sn', 'type', 'ip', 'Interface', 'Queue', 'Dropped-Add']
                       
-                      if host_idx == -1: host_idx = 0
-                      if interface_idx == -1: interface_idx = 1
-                      if queue_idx == -1: queue_idx = 2
-                      if dropped_add_idx == -1:
-                          # Try to find any column containing 'dropped-add'
-                          for i, header in enumerate(headers):
-                              if 'dropped-add' in header.lower():
-                                  dropped_add_idx = i
-                                  break
-                          else:
-                              dropped_add_idx = 3
-                      
-                      print(f"  Analyzing {filename}: Host col={host_idx}, Interface col={interface_idx}, Queue col={queue_idx}, Dropped-Add col={dropped_add_idx}")
-                      
-                      # Analyze data rows
-                      file_alerts = 0
-                      for line_num, line in enumerate(lines[1:], 2):
-                          if not line.strip():
-                              continue
-                          
-                          row = [field.strip() for field in line.split(',')]
-                          needed_idx = max(host_idx, interface_idx, queue_idx, dropped_add_idx)
-                          
-                          if len(row) <= needed_idx:
-                              continue
-                          
-                          host = row[host_idx]
-                          interface = row[interface_idx]
-                          queue = row[queue_idx]
-                          
-                          # Get Dropped-Add value
-                          dropped_add_str = row[dropped_add_idx] if dropped_add_idx < len(row) else "0"
-                          
+                      for col in required_columns:
                           try:
-                              dropped_add = int(float(dropped_add_str))
+                              column_indices[col] = headers.index(col)
                           except ValueError:
-                              dropped_add = 0
+                              # 尝试不区分大小写查找
+                              found = False
+                              for i, header in enumerate(headers):
+                                  if col.lower() in header.lower():
+                                      column_indices[col] = i
+                                      found = True
+                                      break
+                              if not found:
+                                  print(f"  警告: 未找到列 '{col}'，跳过文件 {filename}")
+                                  break
+                      else:
+                          # 所有必需列都找到了
+                          print(f"    列索引: {column_indices}")
                           
-                          # Check alert condition (Dropped-Add > 1)
-                          if dropped_add > 1:
-                              alerts.append({
-                                  'host': host,
-                                  'interface': interface,
-                                  'queue': queue,
-                                  'dropped_packets': dropped_add,
-                                  'file': filename,
-                                  'line': line_num
-                              })
-                              file_alerts += 1
-                      
-                      print(f"  Found {file_alerts} alerts in {filename}")
+                          # 分析数据行
+                          alert_count = 0
+                          for line_num, line in enumerate(lines[1:], start=2):
+                              if not line.strip():
+                                  continue
+                              
+                              row = [field.strip() for field in line.split(',')]
+                              
+                              # 确保行有足够的列
+                              needed_cols = ['host_name', 'ip', 'Interface', 'Queue', 'Dropped-Add']
+                              max_idx = max(column_indices[col] for col in needed_cols)
+                              
+                              if len(row) <= max_idx:
+                                  print(f"    行 {line_num}: 列数不足 ({len(row)} < {max_idx+1})")
+                                  continue
+                              
+                              # 提取值
+                              host_name = row[column_indices['host_name']]
+                              device_ip = row[column_indices['ip']]
+                              interface = row[column_indices['Interface']]
+                              queue = row[column_indices['Queue']]
+                              dropped_add_str = row[column_indices['Dropped-Add']]
+                              
+                              # 转换丢包数
+                              try:
+                                  dropped_add = int(float(dropped_add_str))
+                              except ValueError:
+                                  dropped_add = 0
+                              
+                              # 检查告警条件 (Dropped-Add > 1)
+                              if dropped_add > 1:
+                                  alert = {
+                                      'host_name': host_name,
+                                      'device_ip': device_ip,
+                                      'interface': interface,
+                                      'queue': queue,
+                                      'dropped_packets': dropped_add,
+                                      'file': filename,
+                                      'line': line_num
+                                  }
+                                  alerts.append(alert)
+                                  alert_count += 1
+                                  print(f"    !!! 发现告警: {host_name} {interface} {queue} 丢包数={dropped_add}")
+                          
+                          print(f"  本文件发现 {alert_count} 个告警")
                       
                   except Exception as e:
-                      print(f"Error analyzing {filename}: {e}")
+                      print(f"  分析文件 {filename} 错误: {e}")
+                      import traceback
+                      traceback.print_exc()
                   
-                  # Clean up
+                  # 清理临时文件
                   try:
                       os.remove(local_file)
                   except:
@@ -145,105 +149,115 @@
               
               return alerts
           
-          def send_alert(alert, webhook_url, alert_time, current_time):
-              host = alert['host']
+          def send_wechat_alert(alert, webhook_url, alert_time, current_time):
+              """发送微信告警"""
+              host_name = alert['host_name']
+              device_ip = alert['device_ip']
               interface = alert['interface']
               queue = alert['queue']
               dropped_packets = alert['dropped_packets']
               
               alert_msg = f"""[告警级别]: Warning
-          [告警设备]: {host}
-          [事件]:硬件QOS队列丢包
+          [告警设备]: {host_name}
+          [事件]: 硬件QOS队列丢包
           [状态]: PROBLEM
-          [地址]: {host}
-          [内容]:{host} {interface} {queue}队列丢包数{dropped_packets}
-          [告警时间]:{alert_time}
-          [当前时间]:{current_time}
+          [地址]: {device_ip}
+          [内容]: {interface} {queue}队列丢包数{dropped_packets}
+          [告警时间]: {alert_time}
+          [当前时间]: {current_time}
           告警源：AWX告警"""
               
-              json_data = {
+              # 构建企业微信消息
+              message = {
                   "msgtype": "text",
                   "text": {
                       "content": alert_msg
                   }
               }
               
-              curl_cmd = f"curl -s -X POST -H 'Content-Type: application/json' -d '{json.dumps(json_data)}' '{webhook_url}'"
+              # 使用curl发送请求
+              curl_cmd = f"curl -s -X POST -H 'Content-Type: application/json' -d '{json.dumps(message)}' '{webhook_url}'"
               
               try:
                   result = subprocess.run(curl_cmd, shell=True, capture_output=True, text=True, timeout=10)
+                  
                   if result.returncode == 0:
+                      print(f"✓ 告警发送成功: {host_name} {interface} {queue}")
                       return True
                   else:
-                      print(f"  Curl error: {result.stderr}")
+                      print(f"✗ 告警发送失败: {result.stderr}")
                       return False
+                      
               except Exception as e:
-                  print(f"  Error sending alert: {e}")
+                  print(f"✗ 发送告警时出错: {e}")
                   return False
           
           def main():
               if len(sys.argv) != 7:
-                  print("Usage: python3 script.py <server> <user> <password> <path> <webhook_url> <alert_time>")
+                  print("用法: python3 script.py <server> <user> <password> <path> <webhook_url> <alert_time>")
                   sys.exit(1)
               
               server = sys.argv[1]
               user = sys.argv[2]
               password = sys.argv[3]
-              remote_path = sys.argv[4]
+              base_path = sys.argv[4]
               webhook_url = sys.argv[5]
               alert_time = sys.argv[6]
               
+              # 当前时间
               current_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
               
-              print("=" * 60)
-              print("Starting QoS Alert Monitoring")
-              print("=" * 60)
-              print(f"Server: {server}")
-              print(f"Path: {remote_path}")
-              print(f"Alert Time: {alert_time}")
-              print(f"Current Time: {current_time}")
-              print("=" * 60)
+              print("=" * 80)
+              print("QoS 告警监控系统 (新格式)")
+              print("=" * 80)
+              print(f"开始时间: {current_time}")
+              print(f"监控路径: {base_path}")
+              print(f"文件格式: host_name_sn_queue.csv")
+              print("=" * 80)
               
-              # Download and analyze
-              alerts = download_and_analyze(server, user, password, remote_path)
+              # 分析文件
+              print(f"\n[1/3] 分析CSV文件...")
+              alerts = analyze_csv_files(server, user, password, base_path)
               
+              # 发送告警
+              print(f"\n[2/3] 发送告警...")
               if alerts:
-                  print(f"\nTotal alerts found: {len(alerts)}")
-                  print("-" * 40)
-                  
+                  print(f"总共发现 {len(alerts)} 个告警")
                   success_count = 0
-                  for i, alert in enumerate(alerts, 1):
-                      print(f"\nAlert {i}/{len(alerts)}:")
-                      print(f"  Host: {alert['host']}")
-                      print(f"  Interface: {alert['interface']}")
-                      print(f"  Queue: {alert['queue']}")
-                      print(f"  Dropped Packets: {alert['dropped_packets']}")
-                      print(f"  File: {alert['file']} (line {alert['line']})")
-                      
-                      if send_alert(alert, webhook_url, alert_time, current_time):
-                          success_count += 1
-                          print(f"  Status: ✓ Sent successfully")
-                      else:
-                          print(f"  Status: ✗ Failed to send")
                   
-                  print("\n" + "=" * 60)
-                  print("Alert Summary:")
-                  print(f"  Total Alerts: {len(alerts)}")
-                  print(f"  Successfully Sent: {success_count}")
-                  print(f"  Failed: {len(alerts) - success_count}")
-                  print("=" * 60)
+                  for i, alert in enumerate(alerts, 1):
+                      print(f"\n发送告警 {i}/{len(alerts)}:")
+                      print(f"  设备: {alert['host_name']} ({alert['device_ip']})")
+                      print(f"  接口: {alert['interface']}")
+                      print(f"  队列: {alert['queue']}")
+                      print(f"  丢包数: {alert['dropped_packets']}")
+                      print(f"  文件: {alert['file']} (行 {alert['line']})")
+                      
+                      if send_wechat_alert(alert, webhook_url, alert_time, current_time):
+                          success_count += 1
+                  
+                  print(f"\n" + "=" * 80)
+                  print("告警发送统计:")
+                  print(f"  总告警数: {len(alerts)}")
+                  print(f"  发送成功: {success_count}")
+                  print(f"  发送失败: {len(alerts) - success_count}")
+                  print("=" * 80)
               else:
-                  print("\nNo alerts found (Dropped-Add ≤ 1 for all queues)")
-                  print("=" * 60)
+                  print(f"\n" + "=" * 80)
+                  print("监控完成: 未发现需要告警的情况")
+                  print("(注: 只告警 Dropped-Add > 1 的情况)")
+                  print("=" * 80)
+              
+              print(f"\n监控结束时间: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())}")
           
           if __name__ == "__main__":
               main()
-        dest: "/tmp/monitor_qos_flexible.py"
+        dest: "/tmp/monitor_alerts_no_desc.py"
         mode: '0755'
     
-    - name: Run flexible monitoring script
+    - name: Run monitoring script
       shell: |
-        python3 /tmp/monitor_qos_flexible.py \
+        python3 /tmp/monitor_alerts_no_desc.py \
           "{{ report_server }}" \
           "root" \
           "3edc\$RFV" \
@@ -257,3 +271,19 @@
     - name: Show monitoring results
       debug:
         var: monitor_result.stdout_lines
+    
+    - name: Show monitoring summary
+      debug:
+        msg: |
+          监控完成！
+          详细输出请查看上面的结果。
+          告警格式:
+          [告警级别]: Warning
+          [告警设备]: {host_name}
+          [事件]: 硬件QOS队列丢包
+          [状态]: PROBLEM
+          [地址]: {ip}
+          [内容]: {Interface} {Queue}队列丢包数{Dropped-Add}
+          [告警时间]: {alert_time}
+          [当前时间]: {current_time}
+          告警源：AWX告警
