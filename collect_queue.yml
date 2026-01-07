@@ -6,7 +6,7 @@
   vars:
     report_server: "172.20.149.118"
     report_path: "/root/qos_reports"
-    interfaces_dir: "/interfaces"
+    interfaces_dir: "./interfaces"
     
     # 设备信息变量
     host_name: "{{ device_name | default(inventory_hostname) }}"
