@@ -1,0 +1,41 @@
+---
+# 设备 172.20.149.201 的接口配置
+interfaces:
+  - name: "100GE1/1/1"
+    description: "核心上联端口1"
+    
+  - name: "100GE1/1/2"
+    description: "核心上联端口2"
+    
+  - name: "25GE1/1/1"
+    description: "业务端口1"
+    
+  - name: "25GE1/1/2"
+    description: "业务端口2"
+    
+  - name: "25GE1/1/3"
+    description: "业务端口3"
+    
+  - name: "25GE1/1/4"
+    description: "业务端口4"
+    
+  - name: "25GE1/1/5"
+    description: "业务端口5"
+    
+  - name: "25GE1/1/6"
+    description: "业务端口6"
+    
+  - name: "25GE1/1/7"
+    description: "业务端口7"
+    
+  - name: "25GE1/1/8"
+    description: "业务端口8"
+    
+  - name: "25GE1/1/9"
+    description: "业务端口9"
+    
+  - name: "25GE1/1/10"
+    description: "业务端口10"
+    
+  - name: "25GE1/1/11"
+    description: "业务端口11"
