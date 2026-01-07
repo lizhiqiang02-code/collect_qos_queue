@@ -18,6 +18,24 @@
     output_filename: "{{ host_name }}_{{ device_sn }}_queue.csv"
     
   tasks:
+    # 首先获取时间戳
+    - name: Get epoch timestamp
+      shell: date +"%s"
+      register: epoch_result
+      delegate_to: localhost
+    
+    - name: Get formatted timestamp
+      shell: date +"%Y-%m-%dT%H:%M:%S"
+      register: timestamp_result
+      delegate_to: localhost
+    
+    - name: Set timestamp variables
+      set_fact:
+        epoch_timestamp: "{{ epoch_result.stdout }}"
+        formatted_timestamp: "{{ timestamp_result.stdout }}"
+        new_column: "Dropped-{{ timestamp_result.stdout }}"
+      delegate_to: localhost
+    
     - name: Debug device information
       debug:
         msg: |
@@ -27,6 +45,8 @@
           设备型号: {{ device_type }}
           IP地址: {{ device_ip }}
           输出文件名: {{ output_filename }}
+          时间戳: {{ formatted_timestamp }}
+          新列名: {{ new_column }}
       delegate_to: localhost
     
     - name: Load interface configuration by device type
@@ -49,23 +69,13 @@
         interface_names: "{{ interface_config.interfaces | map(attribute='name') | list }}"
       delegate_to: localhost
     
-    - name: Get current timestamp
-      shell: date +"%Y-%m-%dT%H:%M:%S"
-      register: current_ts
-      delegate_to: localhost
-    
-    - name: Set timestamp fact
-      set_fact:
-        new_timestamp: "{{ current_ts.stdout }}"
-        new_column: "Dropped-{{ current_ts.stdout }}"
-    
     - name: Collect QoS statistics for all interfaces
       cli_command:
         command: "display qos queue statistics interface {{ item }}"
       register: qos_results
       loop: "{{ interface_names }}"
     
-    - name: Create CSV update script without description
+    - name: Create CSV update script without description (文件版本)
       copy:
         content: |
           #!/usr/bin/env python3
@@ -75,6 +85,7 @@
           import os
           import subprocess
           import json
+          import tempfile
           
           def parse_qos_output(output):
               """解析QoS输出"""
@@ -108,13 +119,39 @@
                       new_rows.append(row)
               return new_rows
           
+          def read_qos_data_from_file(file_path):
+              """从文件读取QoS数据"""
+              qos_outputs = []
+              
+              if not os.path.exists(file_path):
+                  return qos_outputs
+              
+              with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                  content = f.read()
+              
+              # 按分隔符分割数据
+              if '===QOS_SEPARATOR===' in content:
+                  parts = content.split('===QOS_SEPARATOR===')
+                  for part in parts:
+                      cleaned = part.strip()
+                      if cleaned:
+                          qos_outputs.append(cleaned)
+              else:
+                  # 如果没有分隔符，假设整个文件是一个QoS输出
+                  cleaned = content.strip()
+                  if cleaned:
+                      qos_outputs.append(cleaned)
+              
+              return qos_outputs
+          
           def main():
               print("=" * 80)
-              print("QoS CSV数据更新 (无Description列)")
+              print("QoS CSV数据更新 (无Description列) - 文件版本")
               print("=" * 80)
               
-              if len(sys.argv) < 10:
-                  print("用法: python3 script.py <host_name> <device_sn> <device_type> <device_ip> <server> <user> <password> <path> <new_column> <interfaces_json> <qos_outputs...>")
+              if len(sys.argv) < 12:
+                  print("用法: python3 script.py <host_name> <device_sn> <device_type> <device_ip> <server> <user> <password> <path> <new_column> <interfaces_json> <qos_data_file>")
+                  print("注意: QoS数据通过文件传递，而不是命令行参数")
                   sys.exit(1)
               
               # 设备信息参数
@@ -137,18 +174,30 @@
               # 接口信息
               interfaces = json.loads(sys.argv[10])
               
+              # QoS数据文件路径
+              qos_data_file = sys.argv[11]
+              
               print(f"设备名称: {host_name}")
               print(f"设备SN: {device_sn}")
               print(f"输出文件: {output_filename}")
               print(f"接口数量: {len(interfaces)}")
               print(f"新时间戳: {new_column}")
+              print(f"QoS数据文件: {qos_data_file}")
+              
+              # 从文件读取QoS数据
+              qos_outputs = read_qos_data_from_file(qos_data_file)
+              print(f"从文件读取到 {len(qos_outputs)} 个QoS输出")
               
               # 解析QoS数据
               qos_data_map = {}
               for i, interface in enumerate(interfaces):
-                  if i + 11 < len(sys.argv):
-                      output = sys.argv[i + 11].replace('\\n', '\n')
-                      qos_data_map[interface] = parse_qos_output(output)
+                  if i < len(qos_outputs):
+                      qos_data_map[interface] = parse_qos_output(qos_outputs[i])
+                  else:
+                      # 如果没有对应的QoS数据，创建空数据
+                      qos_data_map[interface] = {}
+                      for q in range(8):
+                          qos_data_map[interface][f'queue_{q}'] = 0
               
               # 检查文件是否存在
               check_cmd = f"sshpass -p '{password}' ssh -o StrictHostKeyChecking=no {user}@{server} 'test -f \"{remote_path}\"'"
@@ -331,13 +380,36 @@
           
           if __name__ == "__main__":
               main()
-        dest: "/tmp/update_no_description.py"
+        dest: "/tmp/update_no_description_file.py"
         mode: '0755'
       delegate_to: localhost
     
-    - name: Run CSV update without description
+    # 创建QoS数据文件
+    - name: Create QoS data file
+      delegate_to: localhost
+      vars:
+        separator: "===QOS_SEPARATOR==="
+        qos_content: |
+          {% for result in qos_results.results %}
+          {% if not loop.first %}
+          {{ separator }}
+          {% endif %}
+          {{ result.stdout }}
+          {% endfor %}
+      copy:
+        content: "{{ qos_content }}"
+        dest: "/tmp/qos_{{ inventory_hostname }}_{{ epoch_timestamp }}.txt"
+        mode: '0644'
+      register: qos_file_result
+    
+    - name: Set QoS file path fact
+      set_fact:
+        qos_temp_file_path: "{{ qos_file_result.dest }}"
+      delegate_to: localhost
+    
+    - name: Run CSV update with file input
       shell: |
-        python3 /tmp/update_no_description.py \
+        python3 /tmp/update_no_description_file.py \
           "{{ host_name }}" \
           "{{ device_sn }}" \
           "{{ device_type }}" \
@@ -348,9 +420,7 @@
           "{{ report_path }}" \
           "{{ new_column }}" \
           '{{ interface_names | to_json }}' \
-          {% for result in qos_results.results %}
-          "{{ result.stdout | replace('\n', '\\n') | replace('\"', '\\\"') }}" \
-          {% endfor %}
+          "{{ qos_temp_file_path }}"
       args:
         executable: /bin/bash
       register: script_output
@@ -359,6 +429,20 @@
     - name: Show script output
       debug:
         var: script_output.stdout_lines
+    
+    - name: Clean up temporary QoS data file
+      file:
+        path: "{{ qos_temp_file_path }}"
+        state: absent
+      delegate_to: localhost
+      ignore_errors: yes
+    
+    - name: Clean up Python script file
+      file:
+        path: "/tmp/update_no_description_file.py"
+        state: absent
+      delegate_to: localhost
+      ignore_errors: yes
     
     - name: Verify the output file
       shell: |
