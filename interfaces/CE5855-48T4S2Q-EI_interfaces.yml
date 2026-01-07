@@ -6,159 +6,159 @@ interfaces:
     
   - name: "10GE1/0/2"
     description: "核心上联端口"
-	
+    
   - name: "10GE1/0/3"
     description: "核心上联端口"
     
   - name: "10GE1/0/4"
     description: "核心上联端口"
-	
+    
   - name: "40GE1/0/1"
     description: "核心上联端口"
     
   - name: "40GE1/0/2"
     description: "核心上联端口"
-	
+    
   - name: "GE1/0/1"
     description: "业务端口"
-	
+    
   - name: "GE1/0/2"
     description: "业务端口"
-	
+    
   - name: "GE1/0/3"
     description: "业务端口"
-	
+    
   - name: "GE1/0/4"
     description: "业务端口"
-	
+    
   - name: "GE1/0/5"
     description: "业务端口"
-	
+    
   - name: "GE1/0/6"
     description: "业务端口"
-	
+    
   - name: "GE1/0/7"
     description: "业务端口"
-	
+    
   - name: "GE1/0/8"
     description: "业务端口"
-	
+    
   - name: "GE1/0/9"
     description: "业务端口"
-	
+    
   - name: "GE1/0/10"
     description: "业务端口"
-	
+    
   - name: "GE1/0/11"
     description: "业务端口"
-	
+    
   - name: "GE1/0/12"
     description: "业务端口"
-	
+    
   - name: "GE1/0/13"
     description: "业务端口"
-	
+    
   - name: "GE1/0/14"
     description: "业务端口"
-	
+    
   - name: "GE1/0/15"
     description: "业务端口"
-	
+    
   - name: "GE1/0/16"
     description: "业务端口"
-	
+    
   - name: "GE1/0/17"
     description: "业务端口"
-	
+    
   - name: "GE1/0/18"
     description: "业务端口"
-	
+    
   - name: "GE1/0/19"
     description: "业务端口"
-	
+    
   - name: "GE1/0/20"
     description: "业务端口"
-	
+    
   - name: "GE1/0/21"
     description: "业务端口"
-	
+    
   - name: "GE1/0/22"
     description: "业务端口"
-	
+    
   - name: "GE1/0/23"
     description: "业务端口"
-	
+    
   - name: "GE1/0/24"
     description: "业务端口"
-	
+    
   - name: "GE1/0/25"
     description: "业务端口"
-	
+    
   - name: "GE1/0/26"
     description: "业务端口"
-	
+    
   - name: "GE1/0/27"
     description: "业务端口"
-	
+    
   - name: "GE1/0/28"
     description: "业务端口"
-	
+    
   - name: "GE1/0/29"
     description: "业务端口"
-	
+    
   - name: "GE1/0/30"
     description: "业务端口"
-	
+    
   - name: "GE1/0/31"
     description: "业务端口"
-	
+    
   - name: "GE1/0/32"
     description: "业务端口"
-	
+    
   - name: "GE1/0/33"
     description: "业务端口"
-	
+    
   - name: "GE1/0/34"
     description: "业务端口"
-	
+    
   - name: "GE1/0/35"
     description: "业务端口"
-	
+    
   - name: "GE1/0/36"
     description: "业务端口"
-	
+    
   - name: "GE1/0/37"
     description: "业务端口"
-	
+    
   - name: "GE1/0/38"
     description: "业务端口"
-	
+    
   - name: "GE1/0/39"
     description: "业务端口"
-	
+    
   - name: "GE1/0/40"
     description: "业务端口"
-	
+    
   - name: "GE1/0/41"
     description: "业务端口"
-	
+    
   - name: "GE1/0/42"
     description: "业务端口"
-	
+    
   - name: "GE1/0/43"
     description: "业务端口"
-	
+    
   - name: "GE1/0/44"
     description: "业务端口"
-	
+    
   - name: "GE1/0/45"
     description: "业务端口"
-	
+    
   - name: "GE1/0/46"
     description: "业务端口"
-	
+    
   - name: "GE1/0/47"
     description: "业务端口"
-	
+    
   - name: "GE1/0/48"
     description: "业务端口"
