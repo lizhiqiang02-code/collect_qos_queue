@@ -1,5 +1,5 @@
 ---
-- name: Update QoS CSV Data (Flexible Interfaces)
+- name: Update QoS CSV Data with Fixed Device Identification
   hosts: all
   gather_facts: no
   
@@ -9,8 +9,8 @@
     interfaces:
       - "100GE1/1/1"
       - "100GE1/1/2"
-      - "25GE1/1/1"  # 新增的接口
-      - "25GE1/1/2"  # 新增的接口
+      - "25GE1/1/1"
+      - "25GE1/1/2"
   
   tasks:
     - name: Get current timestamp
@@ -29,7 +29,15 @@
       register: qos_results
       loop: "{{ interfaces }}"
     
-    - name: Create flexible update script
+    - name: Debug device information
+      debug:
+        msg: |
+          Device IP: {{ inventory_hostname }}
+          Ansible Host: {{ ansible_host | default(inventory_hostname) }}
+          Target CSV: {{ report_path }}/{{ inventory_hostname }}_qos.csv
+      delegate_to: localhost
+    
+    - name: Create fixed update script
       copy:
         content: |
           #!/usr/bin/env python3
@@ -41,113 +49,142 @@
           import json
           
           def parse_qos_output(output):
+              """解析QoS输出，提取队列丢包数"""
               result = {}
+              
               for q in range(8):
                   queue_key = f'queue_{q}'
                   value = 0
+                  
+                  # 查找队列行
                   for line in output.split('\n'):
                       if f'Queue {q}' in line:
-                          numbers = re.findall(r'\b\d+\b', line)
+                          # 提取所有数字
+                          numbers = re.findall(r'-?\b\d+\b', line)
                           if numbers:
-                              value = int(numbers[-1])
+                              try:
+                                  value = int(numbers[-1])
+                              except ValueError:
+                                  value = 0
                           break
+                  
                   result[queue_key] = value
+              
               return result
           
           def main():
+              print("=" * 60)
+              print("QoS CSV Update - Device Specific")
+              print("=" * 60)
+              
               if len(sys.argv) < 7:
-                  print("Usage: python3 script.py <hostname> <server> <user> <password> <path> <new_column> <interfaces_json> <qos_outputs...>")
+                  print("Error: Insufficient arguments")
+                  print("Usage: python3 script.py <device_ip> <server> <user> <password> <path> <new_column> <interfaces_json> <qos_outputs...>")
                   sys.exit(1)
               
-              hostname = sys.argv[1]
+              device_ip = sys.argv[1]
               server = sys.argv[2]
               user = sys.argv[3]
               password = sys.argv[4]
-              remote_path = sys.argv[5]
+              base_path = sys.argv[5]
               new_column = sys.argv[6]
               
+              # 构建完整的文件路径
+              remote_path = f"{base_path}/{device_ip}_qos.csv"
+              
+              print(f"Device IP: {device_ip}")
+              print(f"Target file: {remote_path}")
+              print(f"New column: {new_column}")
+              
               # 解析接口列表
-              interfaces = json.loads(sys.argv[7])
+              try:
+                  interfaces = json.loads(sys.argv[7])
+                  print(f"Interfaces: {interfaces}")
+              except json.JSONDecodeError as e:
+                  print(f"Error parsing interfaces JSON: {e}")
+                  sys.exit(1)
               
               # 解析QoS输出
               qos_data = {}
+              print(f"\nParsing QoS data:")
               for i, interface in enumerate(interfaces):
                   if i + 8 < len(sys.argv):
                       output = sys.argv[i + 8].replace('\\n', '\n')
                       qos_data[interface] = parse_qos_output(output)
-              
-              print(f"Processing interfaces: {interfaces}")
-              print(f"Got QoS data for interfaces: {list(qos_data.keys())}")
+                      print(f"  {interface}: {qos_data[interface]}")
+                  else:
+                      print(f"  Warning: No QoS output for {interface}")
+                      qos_data[interface] = {}
               
               # 检查文件是否存在
-              check_cmd = f"sshpass -p '{password}' ssh -o StrictHostKeyChecking=no {user}@{server} 'test -f {remote_path} && echo exists'"
+              print(f"\nChecking remote file...")
+              check_cmd = f"sshpass -p '{password}' ssh -o StrictHostKeyChecking=no {user}@{server} 'test -f \"{remote_path}\" && echo exists'"
               
+              file_exists = False
               try:
-                  result = subprocess.run(check_cmd, shell=True, capture_output=True, text=True)
+                  result = subprocess.run(check_cmd, shell=True, capture_output=True, text=True, timeout=10)
                   file_exists = "exists" in result.stdout.strip()
+                  print(f"File exists: {file_exists}")
               except Exception as e:
                   print(f"Error checking file: {e}")
-                  file_exists = False
               
               if file_exists:
-                  print(f"File exists, updating: {remote_path}")
                   # 下载现有文件
-                  download_cmd = f"sshpass -p '{password}' scp -o StrictHostKeyChecking=no {user}@{server}:{remote_path} /tmp/temp_qos.csv"
+                  print(f"Downloading existing file...")
+                  download_cmd = f"sshpass -p '{password}' scp -o StrictHostKeyChecking=no {user}@{server}:\"{remote_path}\" /tmp/temp_qos.csv"
                   try:
-                      subprocess.run(download_cmd, shell=True, check=True)
+                      subprocess.run(download_cmd, shell=True, check=True, timeout=10)
                   except Exception as e:
-                      print(f"Error downloading file: {e}")
+                      print(f"Error downloading: {e}")
                       file_exists = False
               
               if file_exists:
-                  # 读取并更新现有文件
+                  # 读取现有文件
                   rows = []
                   with open('/tmp/temp_qos.csv', 'r') as f:
                       for line in f:
                           if line.strip():
-                              cleaned = [field.strip() for field in line.split(',')]
-                              rows.append(cleaned)
+                              rows.append([field.strip() for field in line.split(',')])
                   
-                  # 检查是否已包含所有接口
-                  existing_interfaces = set()
-                  for i in range(1, len(rows)):
-                      if len(rows[i]) >= 2:
-                          existing_interfaces.add(rows[i][1])
+                  print(f"Existing file has {len(rows)} rows")
                   
-                  print(f"Existing interfaces in CSV: {existing_interfaces}")
-                  print(f"Target interfaces: {interfaces}")
-                  
-                  # 添加缺失的接口
-                  for interface in interfaces:
-                      if interface not in existing_interfaces:
-                          print(f"Adding missing interface: {interface}")
-                          for q in range(8):
-                              queue = f"queue_{q}"
-                              value = qos_data.get(interface, {}).get(queue, 0)
-                              rows.append([hostname, interface, queue, "0", str(value)])
+                  # 验证第一行数据的主机名
+                  if len(rows) > 1 and len(rows[1]) > 0:
+                      existing_host = rows[1][0]
+                      if existing_host != device_ip:
+                          print(f"WARNING: File contains data for {existing_host}, but updating for {device_ip}")
+                          print(f"This may indicate data mix-up!")
                   
                   # 添加新列到表头
                   if new_column not in rows[0]:
                       rows[0].append(new_column)
                   
-                  # 确保所有行都有足够的列
+                  # 确保所有行有足够的列
                   header_len = len(rows[0])
                   for i in range(1, len(rows)):
                       while len(rows[i]) < header_len:
                           rows[i].append("0")
                   
                   # 更新新列的值
-                  new_col_index = rows[0].index(new_column)
-                  for i in range(1, len(rows)):
-                      if len(rows[i]) >= 3:
-                          interface = rows[i][1]
-                          queue = rows[i][2]
-                          
-                          value = "0"
-                          if interface in qos_data and queue in qos_data[interface]:
-                              value = str(qos_data[interface][queue])
-                          
-                          rows[i][new_col_index] = value
+                  if new_column in rows[0]:
+                      new_col_index = rows[0].index(new_column)
+                      updated = 0
+                      
+                      for i in range(1, len(rows)):
+                          if len(rows[i]) >= 3:
+                              # 只更新当前设备的数据行
+                              if rows[i][0] == device_ip:
+                                  interface = rows[i][1]
+                                  queue = rows[i][2]
+                                  
+                                  value = "0"
+                                  if interface in qos_data and queue in qos_data[interface]:
+                                      value = str(qos_data[interface][queue])
+                                  
+                                  rows[i][new_col_index] = value
+                                  updated += 1
+                      
+                      print(f"Updated {updated} rows for device {device_ip}")
                   
                   # 计算Dropped-Add
                   if len(rows[0]) >= 5:
@@ -158,18 +195,18 @@
                       
                       if len(timestamp_indices) >= 2:
                           for i in range(1, len(rows)):
-                              if len(rows[i]) > max(timestamp_indices[-1], timestamp_indices[-2]):
+                              if rows[i][0] == device_ip and len(rows[i]) > max(timestamp_indices[-1], timestamp_indices[-2]):
                                   try:
                                       last_val = int(rows[i][timestamp_indices[-1]])
                                       prev_val = int(rows[i][timestamp_indices[-2]])
-                                      diff = max(0, last_val - prev_val)
+                                      diff = last_val - prev_val
                                       if len(rows[i]) > 3:
                                           rows[i][3] = str(diff)
                                   except:
                                       pass
               else:
-                  print(f"Creating new file: {remote_path}")
                   # 创建新文件
+                  print(f"Creating new file for device {device_ip}")
                   headers = ["Host", "Interface", "Queue", "Dropped-Add", new_column]
                   rows = [headers]
                   
@@ -177,43 +214,42 @@
                       for q in range(8):
                           queue = f"queue_{q}"
                           value = qos_data.get(interface, {}).get(queue, 0)
-                          rows.append([hostname, interface, queue, "0", str(value)])
+                          rows.append([device_ip, interface, queue, "0", str(value)])
+                  
+                  print(f"Created {len(rows)-1} data rows")
               
               # 保存并上传
-              temp_file = '/tmp/qos_updated.csv'
+              temp_file = f'/tmp/{device_ip}_qos_updated.csv'
               with open(temp_file, 'w', newline='') as f:
                   writer = csv.writer(f)
                   writer.writerows(rows)
               
-              upload_cmd = f"sshpass -p '{password}' scp -o StrictHostKeyChecking=no {temp_file} {user}@{server}:{remote_path}"
+              upload_cmd = f"sshpass -p '{password}' scp -o StrictHostKeyChecking=no {temp_file} {user}@{server}:\"{remote_path}\""
               try:
-                  subprocess.run(upload_cmd, shell=True, check=True)
-                  print(f"Successfully updated: {hostname}")
-                  print(f"Total rows: {len(rows)}")
-                  print(f"Interfaces in CSV: {set([row[1] for row in rows[1:] if len(row) > 1])}")
+                  subprocess.run(upload_cmd, shell=True, check=True, timeout=10)
+                  print(f"\n✓ Successfully updated: {remote_path}")
+                  print(f"  Total rows: {len(rows)}")
+                  print(f"  Device: {device_ip}")
+                  print(f"  Interfaces: {interfaces}")
+                  print("=" * 60)
               except Exception as e:
-                  print(f"Error uploading file: {e}")
+                  print(f"\n✗ Error uploading: {e}")
                   sys.exit(1)
           
           if __name__ == "__main__":
               main()
-        dest: "/tmp/update_qos_flexible.py"
+        dest: "/tmp/update_qos_device_fixed.py"
         mode: '0755'
       delegate_to: localhost
     
-    - name: Prepare QoS outputs as JSON list
-      set_fact:
-        qos_outputs_json: "{{ qos_results.results | map(attribute='stdout') | list | to_json }}"
-      delegate_to: localhost
-    
-    - name: Run flexible update script
+    - name: Run fixed update script
       shell: |
-        python3 /tmp/update_qos_flexible.py \
+        python3 /tmp/update_qos_device_fixed.py \
           "{{ inventory_hostname }}" \
           "{{ report_server }}" \
           "root" \
           "3edc\$RFV" \
-          "{{ report_path }}/{{ inventory_hostname }}_qos.csv" \
+          "{{ report_path }}" \
           "{{ new_column }}" \
           '{{ interfaces | to_json }}' \
           {% for result in qos_results.results %}
@@ -221,11 +257,24 @@
           {% endfor %}
       args:
         executable: /bin/bash
+      register: script_output
       delegate_to: localhost
-      
-    - name: Show completion message
+    
+    - name: Show script output
       debug:
-        msg: |
-          QoS data updated for {{ inventory_hostname }}
-          Interfaces: {{ interfaces }}
-          New column: {{ new_column }}
+        var: script_output.stdout_lines
+    
+    - name: Verify file content
+      shell: |
+        sshpass -p '3edc$RFV' ssh -o StrictHostKeyChecking=no root@{{ report_server }} \
+          "echo '=== File: {{ report_path }}/{{ inventory_hostname }}_qos.csv ===' && \
+           echo 'First data row host:' && \
+           tail -n +2 {{ report_path }}/{{ inventory_hostname }}_qos.csv | head -1 | cut -d',' -f1"
+      args:
+        executable: /bin/bash
+      register: verify_content
+      delegate_to: localhost
+    
+    - name: Show verification result
+      debug:
+        var: verify_content.stdout_lines
