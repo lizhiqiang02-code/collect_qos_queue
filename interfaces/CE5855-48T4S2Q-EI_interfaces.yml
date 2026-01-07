@@ -1,0 +1,8 @@
+---
+# 设备CE5855-48T4S2Q-EI的接口配置
+interfaces:
+  - name: "10GE1/0/1"
+    description: "核心上联端口1"
+    
+  - name: "10GE1/0/2"
+    description: "核心上联端口2"
